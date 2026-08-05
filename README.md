@@ -37,7 +37,7 @@ NBI is free and open-source. Connect it to a free or paid LLM provider of your c
 ## Requirements
 
 - Python 3.10+
-- JupyterLab 4.x
+- JupyterLab 4.x (see [JupyterLab Compatibility](docs/jupyterlab-compatibility.md) for 4.4 / 4.5 / 4.6 notes)
 - Node.js — only required for [Claude mode](#claude-mode) (the Claude Code CLI) and for MCP servers that launch via `npx`.
 - A fresh virtualenv or conda env is recommended so NBI doesn't conflict with system Python.
 
@@ -420,6 +420,7 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 ## Documentation
 
 - [`docs/admin-guide.md`](docs/admin-guide.md) — deployment, env vars, security model, air-gap, multi-tenancy.
+- [`docs/jupyterlab-compatibility.md`](docs/jupyterlab-compatibility.md) — JupyterLab 4.4 / 4.5 / 4.6 support matrix and API review.
 - [`docs/skills.md`](docs/skills.md) — Claude Skills management and the org-manifest reconciler.
 - [`docs/rulesets.md`](docs/rulesets.md) — ruleset frontmatter and discovery.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — common problems with copy-pasteable fixes.

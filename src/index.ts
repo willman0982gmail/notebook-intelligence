@@ -865,13 +865,14 @@ const plugin: JupyterFrontEndPlugin<INotebookIntelligence> = {
     ICommandPalette,
     IMainMenu
   ],
-  // @jupyterlab/terminal nests its own @lumino/coreutils copy, so its
-  // Token class is structurally identical but nominally distinct from
-  // ours. Cast through the top-level Token type to keep the plugin
-  // declaration well-typed for the other optionals.
+  // @jupyterlab/terminal (and sometimes @jupyterlab/launcher when Yarn
+  // resolves a newer package than the rest of the tree) nests its own
+  // @lumino/coreutils copy, so its Token class is structurally identical
+  // but nominally distinct from ours. Cast through the top-level Token
+  // type to keep the plugin declaration well-typed for the other optionals.
   optional: [
     IStatusBar,
-    ILauncher,
+    ILauncher as unknown as Token<unknown>,
     ITerminalTracker as unknown as Token<unknown>,
     IInlineCompleterFactory
   ],

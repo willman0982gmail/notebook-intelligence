@@ -200,6 +200,21 @@
   flex-grow: 1;
 }
 
+/* Inline Copilot SVG in the chat-sidebar header button. Matches the
+   sizing of other .user-input-footer-button icons so the gear and
+   Copilot controls line up. */
+.sidebar-header-copilot-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.sidebar-header-copilot-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar-messages {
   flex-grow: 1;
   overflow-y: auto;

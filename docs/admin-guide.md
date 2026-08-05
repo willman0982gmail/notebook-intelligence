@@ -24,7 +24,7 @@ This guide covers deploying Notebook Intelligence at scale — JupyterHub, KubeS
 - [Telemetry events](#telemetry-events)
 - [HTTP API surface](#http-api-surface)
 - [Failure modes](#failure-modes)
-- [Version matrix](#version-matrix)
+- [Version matrix](#version-matrix) ([JupyterLab 4.4 / 4.5 / 4.6 detail](jupyterlab-compatibility.md))
 - [FIPS posture](#fips-posture)
 - [Resource footprint](#resource-footprint)
 
@@ -756,7 +756,7 @@ The extension respects `c.ServerApp.base_url`. Behind JupyterHub at `/user/<name
 
 ## Version matrix
 
-NBI is tested against the JupyterLab and `jupyter_server` versions declared in [`pyproject.toml`](../pyproject.toml).
+NBI is tested against the JupyterLab and `jupyter_server` versions declared in [`pyproject.toml`](../pyproject.toml). For a detailed review of JupyterLab **4.4.x / 4.5.x / 4.6.x** (declared pins, APIs in use, build vs runtime, and caveats), see [JupyterLab Compatibility](jupyterlab-compatibility.md).
 
 | NBI version | JupyterLab | jupyter_server | Python    |
 | ----------- | ---------- | -------------- | --------- |

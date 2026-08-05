@@ -4051,6 +4051,32 @@ function SidebarComponent(props: any) {
         <button
           type="button"
           className="user-input-footer-button"
+          onClick={() => handleLoginClick()}
+          aria-label={
+            ghLoginStatus === GitHubCopilotLoginStatus.LoggedIn
+              ? 'GitHub Copilot: logged in. Open status'
+              : 'Login to GitHub Copilot'
+          }
+          title={
+            ghLoginStatus === GitHubCopilotLoginStatus.LoggedIn
+              ? 'GitHub Copilot: Logged in'
+              : 'Login to GitHub Copilot'
+          }
+        >
+          <span
+            className="sidebar-header-copilot-icon"
+            aria-hidden="true"
+            dangerouslySetInnerHTML={{
+              __html:
+                ghLoginStatus === GitHubCopilotLoginStatus.LoggedIn
+                  ? copilotSvgstr
+                  : copilotWarningSvgstr
+            }}
+          />
+        </button>
+        <button
+          type="button"
+          className="user-input-footer-button"
           data-tour-id={TOUR_ANCHOR.settingsGear}
           onClick={() => handleSettingsButtonClick()}
           aria-label="Open Notebook Intelligence settings"
