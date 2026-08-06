@@ -189,7 +189,7 @@ If `jlpm install` produces unexpected lockfile changes, your local Yarn version 
 
 ## Packaging
 
-See [RELEASE.md](RELEASE.md).
+For required build dependencies and a detailed wheel/sdist packaging walkthrough, see [docs/building-and-packaging.md](docs/building-and-packaging.md). For publishing a tagged release to PyPI/npm, see [RELEASE.md](RELEASE.md).
 
 ## Frontend extension layout sanity check
 

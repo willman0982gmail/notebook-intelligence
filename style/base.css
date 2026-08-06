@@ -505,6 +505,39 @@ button.user-input-footer-button {
   color: var(--jp-ui-font-color1);
 }
 
+/* Header Login / Settings icons: visible hover tooltip (native `title`
+   alone is easy to miss and delayed). Positioned below the button so it
+   stays inside the sidebar chrome. */
+.user-input-footer-button[data-tooltip] {
+  position: relative;
+}
+
+.user-input-footer-button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--jp-inverse-layout-color2);
+  color: var(--jp-ui-inverse-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 80ms ease-in-out;
+  z-index: 1000;
+}
+
+.user-input-footer-button[data-tooltip]:hover::after,
+.user-input-footer-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 /* The slash-button (mentions and commands) renders text rather than an
    svg, so size and center the glyph instead of relying on the svg rule. */
 .user-input-footer-slash-button {

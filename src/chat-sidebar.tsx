@@ -4057,11 +4057,8 @@ function SidebarComponent(props: any) {
               ? 'GitHub Copilot: logged in. Open status'
               : 'Login to GitHub Copilot'
           }
-          title={
-            ghLoginStatus === GitHubCopilotLoginStatus.LoggedIn
-              ? 'GitHub Copilot: Logged in'
-              : 'Login to GitHub Copilot'
-          }
+          title="Login"
+          data-tooltip="Login"
         >
           <span
             className="sidebar-header-copilot-icon"
@@ -4080,7 +4077,8 @@ function SidebarComponent(props: any) {
           data-tour-id={TOUR_ANCHOR.settingsGear}
           onClick={() => handleSettingsButtonClick()}
           aria-label="Open Notebook Intelligence settings"
-          title="Configure providers, API keys, MCP servers, and skills"
+          title="Settings"
+          data-tooltip="Settings"
         >
           <VscSettingsGear />
         </button>

@@ -420,6 +420,7 @@ c.NotebookIntelligence.enable_chat_feedback_always_visible = True
 ## Documentation
 
 - [`docs/admin-guide.md`](docs/admin-guide.md) — deployment, env vars, security model, air-gap, multi-tenancy.
+- [`docs/building-and-packaging.md`](docs/building-and-packaging.md) — dependencies and step-by-step guide to build and package wheels/sdists.
 - [`docs/jupyterlab-compatibility.md`](docs/jupyterlab-compatibility.md) — JupyterLab 4.4 / 4.5 / 4.6 support matrix and API review.
 - [`docs/skills.md`](docs/skills.md) — Claude Skills management and the org-manifest reconciler.
 - [`docs/rulesets.md`](docs/rulesets.md) — ruleset frontmatter and discovery.

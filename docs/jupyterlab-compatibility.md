@@ -201,6 +201,7 @@ Use this when validating a specific JupyterLab minor in your image:
 
 ## Related docs
 
+- [Building and Packaging](building-and-packaging.md) (build deps and wheel/sdist process)
 - [Administrator Guide — Version matrix](admin-guide.md#version-matrix) (NBI release lines vs JupyterLab 4.x)
 - [Troubleshooting](troubleshooting.md)
 - [Contributing](../CONTRIBUTING.md) (building from source)

@@ -2,6 +2,8 @@
 
 The extension can be published to `PyPI` and `npm` manually or using the [Jupyter Releaser](https://github.com/jupyter-server/jupyter_releaser).
 
+For the full list of build-host dependencies and a detailed packaging walkthrough (what Hatch builds, what goes into the wheel, isolated verification), see [docs/building-and-packaging.md](docs/building-and-packaging.md).
+
 ## Manual release
 
 ### Python package
