@@ -1,0 +1,70 @@
+{
+  "chat_model": {
+    "provider": "openai-compatible",
+    "model": "openai-compatible-chat-model",
+    "properties": [
+      {
+        "id": "api_key",
+        "name": "API key",
+        "description": "API key",
+        "value": "local-dev",
+        "optional": false
+      },
+      {
+        "id": "model_id",
+        "name": "Model",
+        "description": "Model (must support streaming)",
+        "value": "databricks/gdp-gpt4o",
+        "optional": false
+      },
+      {
+        "id": "base_url",
+        "name": "Base URL",
+        "description": "Base URL",
+        "value": "http://127.0.0.1:8089/v1",
+        "optional": true
+      },
+      {
+        "id": "context_window",
+        "name": "Context window",
+        "description": "Context window length",
+        "value": "128000",
+        "optional": true
+      }
+    ]
+  },
+  "inline_completion_model": {
+    "provider": "openai-compatible",
+    "model": "openai-compatible-inline-completion-model",
+    "properties": [
+      {
+        "id": "api_key",
+        "name": "API key",
+        "description": "API key",
+        "value": "local-dev",
+        "optional": false
+      },
+      {
+        "id": "model_id",
+        "name": "Model",
+        "description": "Model",
+        "value": "databricks/gdp-gpt4o",
+        "optional": false
+      },
+      {
+        "id": "base_url",
+        "name": "Base URL",
+        "description": "Base URL",
+        "value": "http://127.0.0.1:8089/v1",
+        "optional": true
+      },
+      {
+        "id": "context_window",
+        "name": "Context window",
+        "description": "Context window length",
+        "value": "128000",
+        "optional": true
+      }
+    ]
+  }
+}

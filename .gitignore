@@ -90,6 +90,8 @@ ENV/
 .venv/
 .env/
 venv*/
+.venv-jl45/
+local-dev/.runtime/
 .vscode/*
 # Share Prettier-on-save settings and extension recommendations; keep all
 # other (per-user) VS Code files ignored.
@@ -151,3 +153,5 @@ Gemfile.lock
 benchmarks/claude_perf/results.json
 benchmarks/claude_perf/__pycache__/
 benchmarks/claude_perf/screenshots/
+
+.history/

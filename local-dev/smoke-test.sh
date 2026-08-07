@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Smoke-test the local LLM sidecar (curl). Does not require JupyterLab.
+set -euo pipefail
+
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-8089}"
+BASE="http://${HOST}:${PORT}"
+MODEL_ID="${MODEL_ID:-databricks/gdp-gpt4o}"
+TMPDIR_SMOKE="${TMPDIR:-/tmp}/nbi-sidecar-smoke-$$"
+mkdir -p "$TMPDIR_SMOKE"
+trap 'rm -rf "$TMPDIR_SMOKE"' EXIT
+
+pass=0
+fail=0
+check() {
+  local name="$1"
+  shift
+  if "$@"; then
+    echo "PASS  $name"
+    pass=$((pass + 1))
+  else
+    echo "FAIL  $name"
+    fail=$((fail + 1))
+  fi
+}
+
+echo "==> smoke against ${BASE}"
+
+check "healthz" curl -fsS "${BASE}/healthz" -o "${TMPDIR_SMOKE}/health.json"
+check "healthz body" grep -q '"status": "ok"' "${TMPDIR_SMOKE}/health.json"
+
+if [[ "${SMOKE_QUOTA_DENY:-0}" == "1" ]]; then
+  # Dedicated path: do not burn budget with normal chat/stream first.
+  check "quota" curl -fsS "${BASE}/quota" -o "${TMPDIR_SMOKE}/quota.json"
+  big="$(python3 -c 'print("x"*80000)')"
+  code="$(curl -sS -o "${TMPDIR_SMOKE}/deny.json" -w '%{http_code}' \
+    "${BASE}/v1/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -d "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"${big}\"}],\"stream\":false}" || true)"
+  check "quota 429" bash -c "[[ \"$code\" == \"429\" ]]"
+  check "quota type" grep -q 'quota_exceeded' "${TMPDIR_SMOKE}/deny.json"
+  echo "==> results: pass=${pass} fail=${fail}"
+  [[ "$fail" -eq 0 ]]
+  exit 0
+fi
+
+check "models" curl -fsS "${BASE}/v1/models" -o "${TMPDIR_SMOKE}/models.json"
+check "models id" grep -q "$MODEL_ID" "${TMPDIR_SMOKE}/models.json"
+
+check "quota" curl -fsS "${BASE}/quota" -o "${TMPDIR_SMOKE}/quota.json"
+check "quota user" grep -q '"user_id"' "${TMPDIR_SMOKE}/quota.json"
+
+check "chat non-stream" curl -fsS "${BASE}/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"say hi\"}],\"stream\":false}" \
+  -o "${TMPDIR_SMOKE}/chat.json"
+check "chat choices" grep -q '"choices"' "${TMPDIR_SMOKE}/chat.json"
+
+check "chat stream" curl -fsS -N "${BASE}/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"stream please\"}],\"stream\":true}" \
+  -o "${TMPDIR_SMOKE}/stream.txt"
+check "chat stream sse" grep -q 'data:' "${TMPDIR_SMOKE}/stream.txt"
+
+echo "==> results: pass=${pass} fail=${fail}"
+[[ "$fail" -eq 0 ]]
