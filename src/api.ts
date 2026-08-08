@@ -778,6 +778,31 @@ export class NBIAPI {
     });
   }
 
+  /**
+   * Fetch LLM quota aggregates from the auth sidecar via the Jupyter
+   * server proxy (LLM-S19). Returns `{ available: false }` when the
+   * sidecar is not running — callers should hide the UI affordance.
+   */
+  static async fetchLLMQuota(): Promise<{
+    available: boolean;
+    user_id?: string;
+    plan_id?: string;
+    used_tokens?: number;
+    limit_tokens?: number | null;
+    remaining_tokens?: number | null;
+    soft_cap_hit?: boolean;
+    reset_at?: number;
+    error?: string;
+    [key: string]: unknown;
+  }> {
+    try {
+      return await requestAPI<any>('llm-quota', { method: 'GET' });
+    } catch (reason) {
+      console.debug(`LLM quota unavailable.\n${reason}`);
+      return { available: false, error: String(reason) };
+    }
+  }
+
   static async setConfig(config: any) {
     requestAPI<any>('config', {
       method: 'POST',

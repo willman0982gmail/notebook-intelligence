@@ -1,0 +1,46 @@
+# Example NetworkPolicy: notebook containers cannot reach the LLM Gateway
+# directly; only the sidecar (same pod, localhost) or an allowlisted egress.
+# LLM-S05 — adjust namespace, CIDRs, and hostnames for your cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nbi-user-llm-egress
+  namespace: jhub
+spec:
+  podSelector:
+    matchLabels:
+      app: jupyterhub
+      component: singleuser-server
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # JupyterHub / proxy (cluster DNS names — replace)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: jupyterhub
+              component: hub
+    - to:
+        - podSelector:
+            matchLabels:
+              app: jupyterhub
+              component: proxy
+    # Corporate IdP + LLM Gateway (use IP blocks or FQDN via DNS + CIDR)
+    # Replace with your real egress CIDRs / externalName allowlist controller.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 443
+    # Once a pod is selected by this policy, only the egress rules above are
+    # allowed (implicit deny for everything else, including public GitHub).
+    # Tighten ipBlock CIDRs to IdP + LLM Gateway only before production.

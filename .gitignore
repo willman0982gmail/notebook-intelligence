@@ -155,3 +155,6 @@ benchmarks/claude_perf/__pycache__/
 benchmarks/claude_perf/screenshots/
 
 .history/
+
+# Local corp gateway probe secrets
+local-dev/corp-probe.env

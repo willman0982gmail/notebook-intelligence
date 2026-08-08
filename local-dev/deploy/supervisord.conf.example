@@ -1,0 +1,21 @@
+; Example supervisord config for a singleuser image (LLM-S02.1).
+; Copy into the image and run: supervisord -c /etc/supervisor/supervisord.conf
+
+[supervisord]
+nodaemon=true
+logfile=/var/log/supervisor/supervisord.log
+
+[program:llm-sidecar]
+command=python3 /opt/nbi-local-dev/llm-gateway-sidecar/sidecar.py
+environment=HOST="127.0.0.1",PORT="8089",MODE="mock",TOKEN_PROVIDER="mock",QUOTA_BACKEND="local",NBI_LLM_USER="%(ENV_JUPYTERHUB_USER)s"
+autorestart=true
+priority=10
+stdout_logfile=/var/log/nbi-sidecar.log
+stderr_logfile=/var/log/nbi-sidecar.err
+
+[program:jupyter]
+command=jupyterhub-singleuser
+autorestart=true
+priority=20
+stdout_logfile=/var/log/jupyter.log
+stderr_logfile=/var/log/jupyter.err

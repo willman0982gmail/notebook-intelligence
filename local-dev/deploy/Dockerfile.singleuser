@@ -1,0 +1,40 @@
+# Example singleuser image layer for NBI + LLM auth sidecar (LLM-S02).
+# Build from repo root:
+#   docker build -f local-dev/deploy/Dockerfile.singleuser -t nbi-singleuser:local .
+#
+# Replace BASE_IMAGE with your Hub singleuser image that already has JupyterLab + NBI.
+ARG BASE_IMAGE=quay.io/jupyter/base-notebook:python-3.12
+FROM ${BASE_IMAGE}
+
+USER root
+RUN mkdir -p /opt/nbi-local-dev
+COPY local-dev/ /opt/nbi-local-dev/
+RUN chmod +x /opt/nbi-local-dev/deploy/entrypoint.sh \
+             /opt/nbi-local-dev/python.sh \
+             /opt/nbi-local-dev/llm-gateway-sidecar/fake_java.sh \
+ && mkdir -p /opt/nbi-local-dev/.runtime \
+ && chown -R ${NB_UID}:${NB_GID} /opt/nbi-local-dev
+
+# Bake NBI defaults into the image prefix (LLM-S07.1)
+RUN mkdir -p "${CONDA_DIR}/share/jupyter/nbi" \
+ && cp /opt/nbi-local-dev/nbi-config.local.json "${CONDA_DIR}/share/jupyter/nbi/config.json" \
+ && chown -R ${NB_UID}:${NB_GID} "${CONDA_DIR}/share/jupyter/nbi"
+
+# Optional: copy jupyter_server_config snippet
+RUN mkdir -p /etc/jupyter \
+ && cp /opt/nbi-local-dev/jupyter_server_config.py /etc/jupyter/jupyter_server_config.py
+
+ENV TOKEN_PROVIDER=mock \
+    MODE=mock \
+    HOST=127.0.0.1 \
+    PORT=8089 \
+    QUOTA_BACKEND=local \
+    NBI_LLM_SIDECAR_URL=http://127.0.0.1:8089 \
+    PYTHON=/opt/conda/bin/python
+
+USER ${NB_UID}
+WORKDIR /home/${NB_USER}
+
+# Sidecar then jupyterhub-singleuser
+ENTRYPOINT ["/opt/nbi-local-dev/deploy/entrypoint.sh"]
+CMD ["jupyterhub-singleuser"]

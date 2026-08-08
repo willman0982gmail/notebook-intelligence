@@ -1,0 +1,118 @@
+# Quota Service Deployment + Service (LLM-S11 / S12 / S17).
+# Apply: kubectl -n jhub apply -f local-dev/deploy/k8s/quota-service.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nbi-quota-plans
+  namespace: jhub
+data:
+  plans.json: |
+    {
+      "plans": {
+        "intern": {
+          "id": "intern",
+          "tokens_per_day": 200000,
+          "requests_per_day": 200,
+          "models": ["databricks/gdp-gpt4o"]
+        },
+        "standard": {
+          "id": "standard",
+          "tokens_per_day": 2000000,
+          "requests_per_day": 2000,
+          "tokens_per_day_chat": 1500000,
+          "tokens_per_day_inline": 500000,
+          "models": ["databricks/gdp-gpt4o"]
+        },
+        "power": {
+          "id": "power",
+          "tokens_per_day": 20000000,
+          "requests_per_day": 20000,
+          "models": ["databricks/gdp-gpt4o", "databricks/gdp-gpt4o-large"]
+        }
+      },
+      "group_rules": {
+        "interns": "intern",
+        "ml-platform": "power"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nbi-quota
+  namespace: jhub
+  labels:
+    app: nbi-quota
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nbi-quota
+  template:
+    metadata:
+      labels:
+        app: nbi-quota
+    spec:
+      containers:
+        - name: quota
+          # Replace with an image that contains local-dev/quota_service
+          image: nbi-quota:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+              name: http
+          env:
+            - name: QUOTA_HOST
+              value: '0.0.0.0'
+            - name: QUOTA_PORT
+              value: '8090'
+            - name: QUOTA_PLANS_PATH
+              value: /etc/nbi-quota/plans.json
+            - name: QUOTA_STORE_PATH
+              value: /var/lib/nbi-quota/store.json
+          volumeMounts:
+            - name: plans
+              mountPath: /etc/nbi-quota
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/nbi-quota
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 512Mi
+      volumes:
+        - name: plans
+          configMap:
+            name: nbi-quota-plans
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nbi-quota
+  namespace: jhub
+  labels:
+    app: nbi-quota
+spec:
+  selector:
+    app: nbi-quota
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http

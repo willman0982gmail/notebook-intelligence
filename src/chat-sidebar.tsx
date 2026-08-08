@@ -1418,6 +1418,16 @@ function SidebarComponent(props: any) {
   const [bypassPermissionsAllowed, setBypassPermissionsAllowed] = useState(
     NBIAPI.config.featurePolicies.claude_bypass_permissions.enabled
   );
+  // LLM-S19: remaining quota from auth sidecar (via server proxy).
+  const [llmQuota, setLlmQuota] = useState<{
+    available: boolean;
+    plan_id?: string;
+    used_tokens?: number;
+    limit_tokens?: number | null;
+    remaining_tokens?: number | null;
+    soft_cap_hit?: boolean;
+    reset_at?: number;
+  } | null>(null);
   // Ref mirror so memoized request handlers read the live mode without
   // adding it to their dependency arrays.
   const permissionModeRef = useRef(permissionMode);
@@ -2321,6 +2331,30 @@ function SidebarComponent(props: any) {
       NBIAPI.configChanged.disconnect(handler);
     };
   }, []);
+
+  // Poll sidecar quota through the Jupyter proxy. Hidden when unavailable
+  // so stock Copilot installs are unaffected (LLM-S19).
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const data = await NBIAPI.fetchLLMQuota();
+      if (!cancelled) {
+        setLlmQuota(data);
+      }
+    };
+    refresh();
+    const id = window.setInterval(refresh, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!copilotRequestInProgress) {
+      void NBIAPI.fetchLLMQuota().then(setLlmQuota);
+    }
+  }, [copilotRequestInProgress]);
 
   useEffect(() => {
     let hasTools = false;
@@ -4024,6 +4058,43 @@ function SidebarComponent(props: any) {
       {tourVisible && <TourOverlay onClose={() => setTourVisible(false)} />}
       <div className="sidebar-header">
         <div className="sidebar-title">Notebook Intelligence</div>
+        {llmQuota?.available &&
+          typeof llmQuota.limit_tokens === 'number' &&
+          llmQuota.limit_tokens > 0 && (
+            <span
+              className={
+                'sidebar-header-quota' +
+                (llmQuota.soft_cap_hit ||
+                (typeof llmQuota.remaining_tokens === 'number' &&
+                  llmQuota.remaining_tokens / llmQuota.limit_tokens <= 0.2)
+                  ? ' sidebar-header-quota-low'
+                  : '')
+              }
+              title={
+                `LLM plan: ${llmQuota.plan_id || '—'}\n` +
+                `Used: ${llmQuota.used_tokens ?? 0} / ${llmQuota.limit_tokens} tokens\n` +
+                (llmQuota.soft_cap_hit
+                  ? 'Approaching daily limit (≥80%) — requests still allowed\n'
+                  : '') +
+                (llmQuota.reset_at
+                  ? `Resets: ${new Date(llmQuota.reset_at * 1000).toLocaleString()}`
+                  : '')
+              }
+              aria-label={
+                `LLM quota ${llmQuota.remaining_tokens ?? 0} of ${llmQuota.limit_tokens} tokens remaining` +
+                (llmQuota.plan_id ? `, plan ${llmQuota.plan_id}` : '') +
+                (llmQuota.soft_cap_hit ? ', soft cap warning' : '')
+              }
+            >
+              {typeof llmQuota.remaining_tokens === 'number'
+                ? llmQuota.remaining_tokens >= 1_000_000
+                  ? `${(llmQuota.remaining_tokens / 1_000_000).toFixed(1)}M`
+                  : llmQuota.remaining_tokens >= 1000
+                    ? `${(llmQuota.remaining_tokens / 1000).toFixed(1)}K`
+                    : String(llmQuota.remaining_tokens)
+                : '—'}
+            </span>
+          )}
         {NBIAPI.config.isInClaudeCodeMode && (
           <>
             <button
@@ -4092,6 +4163,35 @@ function SidebarComponent(props: any) {
         {newChatNoticeVisible && (
           <div className="nbi-status-banner">New chat session started.</div>
         )}
+        {llmQuota?.available &&
+          typeof llmQuota.remaining_tokens === 'number' &&
+          typeof llmQuota.limit_tokens === 'number' &&
+          llmQuota.limit_tokens > 0 &&
+          llmQuota.remaining_tokens <= 0 && (
+            <div className="nbi-status-banner nbi-status-banner-warning">
+              LLM daily quota exhausted
+              {llmQuota.plan_id ? ` (plan ${llmQuota.plan_id})` : ''}.
+              JupyterLab still works; try again after reset
+              {llmQuota.reset_at
+                ? ` (${new Date(llmQuota.reset_at * 1000).toLocaleString()})`
+                : ''}
+              .
+            </div>
+          )}
+        {llmQuota?.available &&
+          llmQuota.soft_cap_hit &&
+          typeof llmQuota.remaining_tokens === 'number' &&
+          llmQuota.remaining_tokens > 0 && (
+            <div className="nbi-status-banner nbi-status-banner-softcap">
+              LLM quota soft cap (≥80% used
+              {llmQuota.plan_id ? `, plan ${llmQuota.plan_id}` : ''}). Chat
+              still works until the daily limit is reached
+              {llmQuota.reset_at
+                ? `; resets ${new Date(llmQuota.reset_at * 1000).toLocaleString()}`
+                : ''}
+              .
+            </div>
+          )}
       </div>
       {/* sr-only polite region for chat-status boundary announcements.
           The string toggles on copilotRequestInProgress transitions so

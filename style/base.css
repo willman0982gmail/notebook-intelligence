@@ -215,6 +215,26 @@
   height: 18px;
 }
 
+/* Remaining LLM quota from the auth sidecar (LLM-S19). Informational only. */
+.sidebar-header-quota {
+  align-self: center;
+  margin-right: 6px;
+  padding: 0 6px;
+  font-size: var(--jp-ui-font-size0);
+  line-height: 18px;
+  color: var(--jp-ui-font-color2);
+  border: 1px solid var(--jp-border-color1);
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.sidebar-header-quota-low {
+  color: var(--jp-warn-color1, #c77c11);
+  border-color: var(--jp-warn-color1, #c77c11);
+}
+
 .sidebar-messages {
   flex-grow: 1;
   overflow-y: auto;
@@ -2122,6 +2142,15 @@ svg.access-token-warning {
   border-left: 3px solid var(--jp-info-color1);
   color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size0);
+}
+
+.nbi-status-banner-warning {
+  border-left-color: var(--jp-warn-color1, #c77c11);
+}
+
+.nbi-status-banner-softcap {
+  border-left-color: var(--jp-warn-color2, #e6a23c);
+  opacity: 0.95;
 }
 
 .mcp-server-tools-header,

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Start the local LLM sidecar (mock by default).
+# Start the local LLM sidecar (mock by default). Uses Python >= 3.12 only.
 set -euo pipefail
 LOCAL_DEV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "${LOCAL_DEV}/python.sh"
 RUNTIME="${LOCAL_DEV}/.runtime"
 mkdir -p "$RUNTIME"
 PID_FILE="${RUNTIME}/sidecar.pid"
@@ -14,22 +16,18 @@ export MODEL_ID="${MODEL_ID:-databricks/gdp-gpt4o}"
 export NBI_LLM_USER="${NBI_LLM_USER:-local-dev}"
 export NBI_LLM_PLAN="${NBI_LLM_PLAN:-local}"
 export QUOTA_TOKENS_DAY="${QUOTA_TOKENS_DAY:-50000}"
+export TOKEN_PROVIDER="${TOKEN_PROVIDER:-mock}"
+export QUOTA_BACKEND="${QUOTA_BACKEND:-local}"
+export QUOTA_DEFAULT_PLAN="${QUOTA_DEFAULT_PLAN:-local}"
+export QUOTA_STORE_PATH="${QUOTA_STORE_PATH:-${RUNTIME}/quota-store.json}"
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "sidecar already running (pid $(cat "$PID_FILE")) on http://${HOST}:${PORT}"
   exit 0
 fi
 
-PY="${PYTHON:-}"
-if [[ -z "$PY" ]]; then
-  for cand in python3.12 python3.11 python3.10 python3; do
-    if command -v "$cand" >/dev/null 2>&1; then
-      PY="$cand"
-      break
-    fi
-  done
-fi
-[[ -n "$PY" ]] || { echo "ERROR: python3 not found"; exit 1; }
+PY="$NBI_PYTHON"
+echo "using Python: $PY ($("$PY" --version 2>&1))"
 
 nohup "$PY" "${LOCAL_DEV}/llm-gateway-sidecar/sidecar.py" >"$LOG_FILE" 2>&1 &
 echo $! >"$PID_FILE"

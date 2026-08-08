@@ -1,0 +1,36 @@
+# Reference only — translate into jupyterhub_config.py / chart values (LLM-S05/S06/S11).
+# Shows volumes, env, and cmd expected on each singleuser pod.
+#
+# Equivalent Python lives in hub/jupyterhub_config.snippet.py
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nbi-kubespawner-notes
+  namespace: jhub
+data:
+  notes.txt: |
+    c.KubeSpawner.cmd = ["/opt/nbi-local-dev/deploy/entrypoint.sh"]
+    c.KubeSpawner.environment.update({
+      "MODE": "proxy",
+      "TOKEN_PROVIDER": "jar",
+      "TOKEN_JAR": "/var/run/nbi-llm-auth/token-tool.jar",
+      "KEYSTORE_PATH": "/var/run/nbi-llm-auth/keystore.jks",
+      "TRUSTSTORE_PATH": "/var/run/nbi-llm-auth/truststore.jks",
+      "UPSTREAM_BASE_URL": "https://llm-gateway.example.com/v1",
+      "QUOTA_BACKEND": "http",
+      "QUOTA_SERVICE_URL": "http://nbi-quota.jhub.svc.cluster.local:8090",
+      "NBI_LLM_SIDECAR_URL": "http://127.0.0.1:8089",
+      "HOST": "127.0.0.1",
+      "PORT": "8089",
+    })
+    # Passwords via secretKeyRef (not plaintext in Hub config):
+    # KEYSTORE_PASSWORD / TRUSTSTORE_PASSWORD from secret nbi-llm-auth
+    c.KubeSpawner.volumes = [{
+      "name": "nbi-llm-auth",
+      "secret": {"secretName": "nbi-llm-auth", "defaultMode": 0o400},
+    }]
+    c.KubeSpawner.volume_mounts = [{
+      "name": "nbi-llm-auth",
+      "mountPath": "/var/run/nbi-llm-auth",
+      "readOnly": True,
+    }]

@@ -37,41 +37,62 @@ class LiteLLMCompatibleChatModel(ChatModel):
             return DEFAULT_CONTEXT_WINDOW
 
     def completions(self, messages: list[dict], tools: list[dict] = None, response: ChatResponse = None, cancel_token: CancelToken = None, options: dict = {}) -> Any:
+        from notebook_intelligence.api import MarkdownData
+        from notebook_intelligence.llm_providers.openai_compatible_llm_provider import (
+            format_openai_compatible_error,
+        )
+
         litellm = import_litellm()
         stream = response is not None
         model_id = self.get_property("model_id").value
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
         api_key = api_key_prop.value if api_key_prop is not None else None
-        litellm_resp = litellm.completion(
-            model=model_id,
-            messages=messages.copy(),
-            tools=tools,
-            tool_choice=options.get("tool_choice", None),
-            api_base=base_url,
-            api_key=api_key,
-            stream=stream,
-        )
+        feature = options.get("nbi_feature") or "chat"
+        try:
+            litellm_resp = litellm.completion(
+                model=model_id,
+                messages=messages.copy(),
+                tools=tools,
+                tool_choice=options.get("tool_choice", None),
+                api_base=base_url,
+                api_key=api_key,
+                stream=stream,
+                extra_headers={"X-NBI-Feature": feature},
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = format_openai_compatible_error(exc)
+            if response is not None:
+                response.stream(MarkdownData(f"**{msg}**"))
+                response.finish()
+                return None
+            raise
 
         if stream:
-            for chunk in litellm_resp:
-                if len(chunk.choices) == 0:
-                    continue
-                delta = chunk.choices[0].delta
-                reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
-                if reasoning is not None:
-                    reasoning = str(reasoning)
-                response.stream({
-                        "choices": [{
-                            "delta": {
-                                "role": delta.role,
-                                "content": delta.content,
-                                "reasoning_content": reasoning
-                            }
-                        }]
-                    })
-            response.finish()
-            return
+            try:
+                for chunk in litellm_resp:
+                    if len(chunk.choices) == 0:
+                        continue
+                    delta = chunk.choices[0].delta
+                    reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
+                    if reasoning is not None:
+                        reasoning = str(reasoning)
+                    response.stream({
+                            "choices": [{
+                                "delta": {
+                                    "role": delta.role,
+                                    "content": delta.content,
+                                    "reasoning_content": reasoning
+                                }
+                            }]
+                        })
+                response.finish()
+                return
+            except Exception as exc:  # noqa: BLE001
+                msg = format_openai_compatible_error(exc)
+                response.stream(MarkdownData(f"**{msg}**"))
+                response.finish()
+                return
         else:
             json_resp = json.loads(litellm_resp.model_dump_json()) 
             # Capture reasoning fields if they exist as extra attributes
@@ -117,16 +138,19 @@ class LiteLLMCompatibleInlineCompletionModel(InlineCompletionModel):
         base_url = self.get_property("base_url").value
         api_key_prop = self.get_property("api_key")
         api_key = api_key_prop.value if api_key_prop is not None else None
-        litellm_resp = litellm.completion(
-            model=model_id,
-            prompt=prefix,
-            suffix=suffix,
-            stream=False,
-            api_base=base_url,
-            api_key=api_key,
-        )
-
-        return litellm_resp.choices[0].message.content
+        try:
+            litellm_resp = litellm.completion(
+                model=model_id,
+                prompt=prefix,
+                suffix=suffix,
+                stream=False,
+                api_base=base_url,
+                api_key=api_key,
+                extra_headers={"X-NBI-Feature": "inline"},
+            )
+            return litellm_resp.choices[0].message.content
+        except Exception:  # noqa: BLE001
+            return ""
 
 class LiteLLMCompatibleLLMProvider(LLMProvider):
     def __init__(self):

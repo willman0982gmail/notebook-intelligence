@@ -1,0 +1,39 @@
+# Daily usage CSV rollup (LLM-S17.2 / S17.4).
+# Writes aggregates-only CSV to an emptyDir (replace with PVC / object storage).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nbi-llm-usage-export
+  namespace: jhub
+spec:
+  schedule: '15 1 * * *' # 01:15 UTC daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: export
+              image: curlimages/curl:8.5.0
+              env:
+                - name: QUOTA_SERVICE_URL
+                  value: http://nbi-quota.jhub.svc.cluster.local:8090
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  OUT=/export/usage-$(date -u +%Y%m%d).json
+                  curl -fsS "${QUOTA_SERVICE_URL}/v1/usage/summary" -o "$OUT"
+                  echo "wrote $OUT"
+                  # Optional: upload to FinOps bucket here
+                  ls -la /export
+              volumeMounts:
+                - name: export
+                  mountPath: /export
+          volumes:
+            - name: export
+              emptyDir: {}

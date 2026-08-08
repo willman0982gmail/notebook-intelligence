@@ -1,0 +1,80 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "type": "dashboard"
+      }
+    ]
+  },
+  "title": "NBI LLM Sidecar Usage",
+  "uid": "nbi-llm-sidecar",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "LLM tokens total",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(nbi_llm_tokens_total[5m])) by (user)",
+          "legendFormat": "{{user}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Quota denials",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(nbi_llm_denials_total[5m])) by (user)",
+          "legendFormat": "{{user}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens by feature (chat / inline)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(nbi_llm_tokens_by_feature_total[5m])) by (feature)",
+          "legendFormat": "{{feature}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Soft-cap hits (≥80%, alert only)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(nbi_llm_soft_cap_hits_total[5m])) by (user)",
+          "legendFormat": "{{user}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Requests",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 16 },
+      "targets": [{ "expr": "sum(nbi_llm_requests_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Mint failures",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 16 },
+      "targets": [{ "expr": "sum(nbi_llm_mint_failures_total)" }]
+    },
+    {
+      "type": "stat",
+      "title": "Soft-cap hits",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 16 },
+      "targets": [{ "expr": "sum(nbi_llm_soft_cap_hits_total)" }]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 2
+}

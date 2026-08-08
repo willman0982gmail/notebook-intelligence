@@ -881,6 +881,45 @@ class EmitTelemetryEventHandler(APIHandler):
         thread.start()
         self.finish(json.dumps({}))
 
+
+class LLMQuotaHandler(APIHandler):
+    """Proxy GET to the local auth sidecar ``/quota`` (LLM-S19).
+
+    The browser must not call the sidecar directly on JupyterHub (sidecar
+    binds loopback inside the user pod). This handler fetches
+    ``{NBI_LLM_SIDECAR_URL}/quota`` server-side and returns aggregates only.
+    """
+
+    @tornado.web.authenticated
+    def get(self):
+        import urllib.error
+        import urllib.request
+
+        base = os.environ.get("NBI_LLM_SIDECAR_URL", "http://127.0.0.1:8089").rstrip("/")
+        url = f"{base}/quota"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"raw": payload}
+            payload["available"] = True
+            payload["sidecar_url"] = base
+            self.finish(json.dumps(payload))
+        except Exception as exc:  # noqa: BLE001
+            # Soft-fail: UI hides the badge when unavailable.
+            log.debug("LLM quota sidecar unreachable at %s: %s", url, exc)
+            self.finish(
+                json.dumps(
+                    {
+                        "available": False,
+                        "sidecar_url": base,
+                        "error": str(exc)[:200],
+                    }
+                )
+            )
+
+
 class GetGitHubLoginStatusHandler(APIHandler):
     # The following decorator should be present on all verb methods (head, get, post,
     # patch, put, delete, options) to ensure only authorized user can request the
@@ -3272,6 +3311,7 @@ class NotebookIntelligence(ExtensionApp):
         route_pattern_mcp_config_file = url_path_join(base_url, "notebook-intelligence", "mcp-config-file")
         route_pattern_reload_mcp_servers = url_path_join(base_url, "notebook-intelligence", "reload-mcp-servers")
         route_pattern_emit_telemetry_event = url_path_join(base_url, "notebook-intelligence", "emit-telemetry-event")
+        route_pattern_llm_quota = url_path_join(base_url, "notebook-intelligence", "llm-quota")
         route_pattern_github_login_status = url_path_join(base_url, "notebook-intelligence", "gh-login-status")
         route_pattern_github_login = url_path_join(base_url, "notebook-intelligence", "gh-login")
         route_pattern_github_logout = url_path_join(base_url, "notebook-intelligence", "gh-logout")
@@ -3415,6 +3455,7 @@ class NotebookIntelligence(ExtensionApp):
             (route_pattern_mcp_config_file, MCPConfigFileHandler),
             (route_pattern_reload_mcp_servers, ReloadMCPServersHandler),
             (route_pattern_emit_telemetry_event, EmitTelemetryEventHandler),
+            (route_pattern_llm_quota, LLMQuotaHandler),
             (route_pattern_github_login_status, GetGitHubLoginStatusHandler),
             (route_pattern_github_login, PostGitHubLoginHandler),
             (route_pattern_github_logout, GetGitHubLogoutHandler),

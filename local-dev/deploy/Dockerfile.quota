@@ -1,0 +1,19 @@
+# Quota Service image (LLM-S11 / S17).
+# Build from repo root:
+#   docker build -f local-dev/deploy/Dockerfile.quota -t nbi-quota:local .
+FROM python:3.12-slim
+
+WORKDIR /opt/nbi-local-dev
+COPY local-dev/llm-gateway-sidecar/quota_store.py /opt/nbi-local-dev/llm-gateway-sidecar/
+COPY local-dev/quota_service/ /opt/nbi-local-dev/quota_service/
+
+ENV QUOTA_HOST=0.0.0.0 \
+    QUOTA_PORT=8090 \
+    QUOTA_PLANS_PATH=/opt/nbi-local-dev/quota_service/plans.json \
+    QUOTA_STORE_PATH=/var/lib/nbi-quota/store.json \
+    PYTHONPATH=/opt/nbi-local-dev/llm-gateway-sidecar
+
+RUN mkdir -p /var/lib/nbi-quota
+
+EXPOSE 8090
+CMD ["python", "/opt/nbi-local-dev/quota_service/server.py"]

@@ -1,0 +1,34 @@
+{
+  "plans": {
+    "intern": {
+      "id": "intern",
+      "tokens_per_day": 200000,
+      "requests_per_day": 200,
+      "models": ["databricks/gdp-gpt4o"]
+    },
+    "standard": {
+      "id": "standard",
+      "tokens_per_day": 2000000,
+      "requests_per_day": 2000,
+      "tokens_per_day_chat": 1500000,
+      "tokens_per_day_inline": 500000,
+      "models": ["databricks/gdp-gpt4o"]
+    },
+    "power": {
+      "id": "power",
+      "tokens_per_day": 20000000,
+      "requests_per_day": 20000,
+      "models": ["databricks/gdp-gpt4o", "databricks/gdp-gpt4o-large"]
+    },
+    "local": {
+      "id": "local",
+      "tokens_per_day": 50000,
+      "requests_per_day": 10000,
+      "models": ["*"]
+    }
+  },
+  "group_rules": {
+    "interns": "intern",
+    "ml-platform": "power"
+  }
+}

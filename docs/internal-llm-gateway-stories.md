@@ -2,6 +2,36 @@
 
 Backlog derived from [`internal-llm-gateway-integration.md`](internal-llm-gateway-integration.md).
 
+## Implementation status (repo)
+
+In-tree spike under [`../local-dev/`](../local-dev/README.md). **Use Python ≥ 3.12** (`conda activate nbi-jl45`); never system 3.9. Re-run `./local-dev/run-regression.sh` after changes.
+
+| Story       | Status              | Notes                                                                                 |
+| ----------- | ------------------- | ------------------------------------------------------------------------------------- |
+| LLM-S01     | **Done (local)**    | Sidecar + loopback refuse test; Hub pod proof still manual                            |
+| LLM-S02     | **Done (local)**    | entrypoint + `Dockerfile.singleuser` + supervisord example                            |
+| LLM-S03     | **Done (local)**    | Refresh + `tabletop-chaos.sh` TTL drill                                               |
+| LLM-S04     | **Done (local)**    | CA env + `extract-ca-from-jks.sh`; verify gated in sidecar                            |
+| LLM-S05     | **Done (manifest)** | NetworkPolicy example — apply on cluster TBD                                          |
+| LLM-S06     | **Done (manifest)** | Secret + KubeSpawner volume snippet — real secrets out of band                        |
+| LLM-S07     | **Done (local)**    | bake config + Dockerfile bake path                                                    |
+| LLM-S08     | **Done (docs)**     | disabled_providers + break-glass in runbook                                           |
+| LLM-S09     | **Done (local)**    | Inline config + FIM probe; corp latency TBD                                           |
+| LLM-S10     | **Done (local)**    | Feature matrix + Agent-off; corp TBD                                                  |
+| LLM-S11–S15 | **Done (local)**    | Quota svc K8s YAML + HTTP backend smoke + fail-closed                                 |
+| LLM-S16     | **Done (local)**    | metrics / Grafana / alerts / log redact                                               |
+| LLM-S17–S18 | **Done (local)**    | `/v1/usage/summary`, CSV export, tabletop chaos, runbook                              |
+| LLM-S19     | **Done (local)**    | `llm-quota` proxy + badge + soft-cap banner                                           |
+| LLM-S20     | **Done**            | ADR: sidecar-only                                                                     |
+| LLM-S21     | **Deferred**        | ADR in `local-dev/docs/adr-central-gateway-keys.md`                                   |
+| LLM-S22     | **Done (local)**    | feature header + caps + metrics by feature                                            |
+| LLM-S23     | **Partial**         | probe + matrix merge; **corp probe** still TBD                                        |
+| LLM-S24     | **Done (local)**    | regression + chaos + [`go-live-checklist.md`](../local-dev/docs/go-live-checklist.md) |
+
+Remaining work is **cluster / corp-gateway only** — see
+[`../local-dev/docs/remaining-tasks.md`](../local-dev/docs/remaining-tasks.md) and
+[`../local-dev/docs/go-live-checklist.md`](../local-dev/docs/go-live-checklist.md).
+
 **Conventions**
 
 | Field         | Meaning                                                 |
@@ -50,9 +80,9 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] In a Hub user pod, NBI chat returns a streamed (or full) reply from `databricks/gdp-gpt4o` (or chosen model).
-- [ ] No GitHub Copilot login is required.
-- [ ] Traffic path is NBI → `127.0.0.1` sidecar → LLM Gateway.
+- [ ] In a Hub user pod, NBI chat returns a streamed (or full) reply from `databricks/gdp-gpt4o` (or chosen model). _(cluster)_
+- [x] No GitHub Copilot login is required. _(local: `disabled_providers`)_
+- [x] Traffic path is NBI → `127.0.0.1` sidecar → LLM Gateway. _(local mock/proxy)_
 
 **Sub-tasks**
 
@@ -72,8 +102,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Pod start brings up sidecar then (or with) Jupyter singleuser.
-- [ ] Sidecar ready before first NBI call (or NBI retries until ready).
+- [x] Pod start brings up sidecar then (or with) Jupyter singleuser. _(entrypoint / Dockerfile)_
+- [x] Sidecar ready before first NBI call (or NBI retries until ready). _(`/healthz` wait in entrypoint)_
 
 **Sub-tasks**
 
@@ -93,8 +123,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] With short test TTL, chat still succeeds after refresh without user action.
-- [ ] Failed mint retries with backoff; clear error if IdP down.
+- [x] With short test TTL, chat still succeeds after refresh without user action. _(tabletop)_
+- [x] Failed mint retries with backoff; clear error if IdP down. _(RetryingTokenProvider)_
 
 **Sub-tasks**
 
@@ -112,8 +142,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Sidecar trusts gateway/IdP via mounted CA bundle (or documented residual risk if verify disabled **only** in sidecar).
-- [ ] NBI itself does not set `verify=False`.
+- [x] Sidecar trusts gateway/IdP via mounted CA bundle (or documented residual risk if verify disabled **only** in sidecar). _(CA env + extract-ca-from-jks; corp PEM mount still cluster)_
+- [x] NBI itself does not set `verify=False`. _(code scan)_
 
 **Sub-tasks**
 
@@ -171,8 +201,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Fresh spawn: chat works with baked `chat_model` / `inline_completion_model` pointing at sidecar.
-- [ ] `github-copilot` (and other SaaS providers as decided) hidden via `disabled_providers`.
+- [x] Fresh spawn: chat works with baked `chat_model` / `inline_completion_model` pointing at sidecar. _(local bake + config; Hub PVC still cluster)_
+- [x] `github-copilot` (and other SaaS providers as decided) hidden via `disabled_providers`. _(jupyter_server_config.py)_
 
 **Sub-tasks**
 
@@ -191,8 +221,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Settings dropdown does not offer Copilot (and other disabled IDs).
-- [ ] Document how break-glass re-enables a provider if needed.
+- [x] Settings dropdown does not offer Copilot (and other disabled IDs). _(disabled_providers wiring)_
+- [x] Document how break-glass re-enables a provider if needed. _(runbook)_
 
 **Sub-tasks**
 
@@ -211,8 +241,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Typing in a code cell yields inline suggestions via the same sidecar path.
-- [ ] Debounce/cost note documented for operators.
+- [x] Typing in a code cell yields inline suggestions via the same sidecar path. _(inline model baked + FIM smoke; UI quality still corp)_
+- [x] Debounce/cost note documented for operators. _(feature-matrix / runbook)_
 
 **Sub-tasks**
 
@@ -230,8 +260,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Written matrix: streaming / tools / vision / agent — Supported / Degraded / Off.
-- [ ] Agent mode disabled or documented if tools unsupported.
+- [x] Written matrix: streaming / tools / vision / agent — Supported / Degraded / Off. _(feature-matrix.md; Corp column TBD)_
+- [x] Agent mode disabled or documented if tools unsupported. _(feature-matrix Agent section)_
 
 **Sub-tasks**
 
@@ -252,9 +282,9 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] No second LLM login.
-- [ ] Pod receives `NBI_LLM_USER` (and groups/plan metadata) from Hub spawn.
-- [ ] Two users with different groups get different plans automatically.
+- [x] No second LLM login. _(sidecar JAR/mock auth)_
+- [x] Pod receives `NBI_LLM_USER` (and groups/plan metadata) from Hub spawn. _(pre_spawn_hook; Hub apply still cluster)_
+- [x] Two users with different groups get different plans automatically. _(local two-plan test; Hub proof still cluster)_
 
 **Sub-tasks**
 
@@ -274,8 +304,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Plans `intern` / `standard` / `power` (or org equivalents) exist in central catalog.
-- [ ] Resolution order: user override → group → default.
+- [x] Plans `intern` / `standard` / `power` (or org equivalents) exist in central catalog. _(plans.json)_
+- [x] Resolution order: user override → group → default. _(quota_store + tests)_
 
 **Sub-tasks**
 
@@ -294,9 +324,9 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Sidecar check → proxy → commit using gateway `usage` tokens.
-- [ ] Counters survive pod restart (durable store).
-- [ ] Prompts/completions not stored in metering DB by default.
+- [x] Sidecar check → proxy → commit using gateway `usage` tokens. _(mock + proxy path; corp usage still TBD)_
+- [x] Counters survive pod restart (durable store). _(file store test)_
+- [x] Prompts/completions not stored in metering DB by default. _(events = aggregates only)_
 
 **Sub-tasks**
 
@@ -317,9 +347,9 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Over quota → HTTP 429 with `quota_exceeded` style message.
-- [ ] Chat shows actionable text (plan + reset time).
-- [ ] Notebook editing continues; only LLM calls fail.
+- [x] Over quota → HTTP 429 with `quota_exceeded` style message. _(sidecar + smoke)_
+- [x] Chat shows actionable text (plan + reset time). _(format_openai_compatible_error)_
+- [x] Notebook editing continues; only LLM calls fail. _(inline quiet-fail documented)_
 
 **Sub-tasks**
 
@@ -339,8 +369,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Editing `NBI_LLM_PLAN` in the pod does not increase enforced limits.
-- [ ] Direct gateway calls from notebook fail (ties to LLM-S05).
+- [x] Editing `NBI_LLM_PLAN` in the pod does not increase enforced limits. _(forge ignored tests)_
+- [ ] Direct gateway calls from notebook fail (ties to LLM-S05). _(cluster NetworkPolicy)_
 
 **Sub-tasks**
 
@@ -360,8 +390,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Grafana (or equiv.) shows tokens/requests by user, team, plan, model.
-- [ ] Denial rate (`quota_exceeded`) visible.
+- [x] Grafana (or equiv.) shows tokens/requests by user, team, plan, model. _(dashboard JSON in-tree; import still cluster)_
+- [x] Denial rate (`quota_exceeded`) visible. _(denials metric + panel)_
 
 **Sub-tasks**
 
@@ -380,8 +410,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Job or query answers “who used how much yesterday/month?”.
-- [ ] Report contains aggregates only (no prompt bodies).
+- [x] Job or query answers “who used how much yesterday/month?”. _(/v1/usage/summary + CronJob example)_
+- [x] Report contains aggregates only (no prompt bodies).
 
 **Sub-tasks**
 
@@ -400,7 +430,7 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Runbook covers raise quota, reset window, break-glass, sidecar/IdP outage.
+- [x] Runbook covers raise quota, reset window, break-glass, sidecar/IdP outage. _(runbook.md + tabletop)_
 
 **Sub-tasks**
 
@@ -419,8 +449,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Optional indicator reads `GET http://127.0.0.1:<port>/quota`.
-- [ ] Display is informational; enforcement remains server-side.
+- [x] Optional indicator reads `GET http://127.0.0.1:<port>/quota`. _(via `/llm-quota`)_
+- [x] Display is informational; enforcement remains server-side. _(badge + soft-cap banner)_
 
 **Sub-tasks**
 
@@ -438,8 +468,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Decision record: stay sidecar-only **or** build `corp-llm-gateway` plugin.
-- [ ] If plugin: JAR refresh + register via `nbi_extensions`.
+- [x] Decision record: stay sidecar-only **or** build `corp-llm-gateway` plugin. _(adr-sidecar-vs-plugin: sidecar-only)_
+- [ ] If plugin: JAR refresh + register via `nbi_extensions`. _(N/A — deferred)_
 
 **Sub-tasks**
 
@@ -457,8 +487,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Decision: sidecar meters **or** gateway native per-user keys/headers.
-- [ ] If gateway: spawn maps Hub user → gateway consumer; sidecar keeps JAR platform auth.
+- [x] Decision: sidecar meters **or** gateway native per-user keys/headers. _(adr-central-gateway-keys: sidecar for now)_
+- [ ] If gateway: spawn maps Hub user → gateway consumer; sidecar keeps JAR platform auth. _(deferred)_
 
 **Sub-tasks**
 
@@ -476,8 +506,8 @@ flowchart LR
 
 **Acceptance**
 
-- [ ] Feature tag (`chat` \| `inline` \| `agent`) on metered events.
-- [ ] Optional separate budgets in plan schema.
+- [x] Feature tag (`chat` \| `inline` \| `agent`) on metered events. _(X-NBI-Feature)_
+- [x] Optional separate budgets in plan schema. _(tokens_per_day_chat/inline)_
 
 **Sub-tasks**
 

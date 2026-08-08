@@ -1,28 +1,17 @@
 #!/usr/bin/env python3
-"""Minimal OpenAI-compatible LLM auth sidecar for local NBI testing.
+"""OpenAI-compatible LLM auth sidecar for NBI local / Hub spike.
 
-Modes
------
-mock  (default)  Return deterministic chat completions (no upstream).
-proxy            Forward to UPSTREAM_BASE_URL with Authorization: Bearer TOKEN.
-
-Env
----
-HOST                 bind address (default: 127.0.0.1)
-PORT                 listen port (default: 8089)
-MODE                 mock | proxy (default: mock)
-MODEL_ID             default model id (default: databricks/gdp-gpt4o)
-NBI_LLM_USER         subject for quota (default: local-dev)
-NBI_LLM_PLAN         plan label (default: local)
-QUOTA_TOKENS_DAY     hard daily token budget; 0 = unlimited (default: 50000)
-UPSTREAM_BASE_URL    e.g. https://gateway.example.com/v1  (proxy mode)
-UPSTREAM_API_KEY     bearer for upstream (proxy mode)
-UPSTREAM_VERIFY_TLS  1/0 (default: 1). Set 0 only for local corp spikes.
+Implements stories LLM-S01–S04, S13–S16 (local):
+  - mock / jar / static token mint + refresh
+  - proxy or mock chat completions
+  - quota check/commit via local file store or HTTP Quota Service
+  - /healthz, /quota, /metrics
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import ssl
 import sys
@@ -31,77 +20,75 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+# Allow `python sidecar.py` from this directory
+_SIDECAR_DIR = Path(__file__).resolve().parent
+if str(_SIDECAR_DIR) not in sys.path:
+    sys.path.insert(0, str(_SIDECAR_DIR))
+
+from quota_store import build_quota_backend  # noqa: E402
+from token_provider import build_token_provider  # noqa: E402
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO"),
+    format="[sidecar] %(levelname)s %(message)s",
+)
+log = logging.getLogger("sidecar")
 
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8089"))
 MODE = os.environ.get("MODE", "mock").strip().lower()
 MODEL_ID = os.environ.get("MODEL_ID", "databricks/gdp-gpt4o")
-USER_ID = os.environ.get("NBI_LLM_USER", "local-dev")
-PLAN_ID = os.environ.get("NBI_LLM_PLAN", "local")
-QUOTA_TOKENS_DAY = int(os.environ.get("QUOTA_TOKENS_DAY", "50000"))
+USER_ID = os.environ.get("NBI_LLM_USER", os.environ.get("JUPYTERHUB_USER", "local-dev"))
+GROUPS = [g for g in os.environ.get("NBI_LLM_GROUPS", "").split(",") if g]
+# Hint only — enforcement uses Quota Service / store resolver (LLM-S15)
+HINT_PLAN = os.environ.get("NBI_LLM_PLAN", "local")
 UPSTREAM_BASE_URL = os.environ.get("UPSTREAM_BASE_URL", "").rstrip("/")
-UPSTREAM_API_KEY = os.environ.get("UPSTREAM_API_KEY", "")
-UPSTREAM_VERIFY_TLS = os.environ.get("UPSTREAM_VERIFY_TLS", "1") not in (
-    "0",
-    "false",
-    "False",
-)
+UPSTREAM_VERIFY_TLS = os.environ.get("UPSTREAM_VERIFY_TLS", "1") not in ("0", "false", "False")
+CA_BUNDLE = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE") or ""
 
-_lock = threading.Lock()
-_used_tokens = 0
-_window_start = time.time()
 _started_at = time.time()
+_metrics = {
+    "requests_total": 0,
+    "tokens_total": 0,
+    "denials_total": 0,
+    "upstream_errors_total": 0,
+    "mint_failures_total": 0,
+    "soft_cap_hits_total": 0,
+    # feature → count (chat|inline|agent)
+    "requests_by_feature": {},
+    "tokens_by_feature": {},
+}
+_metrics_lock = threading.Lock()
+
+token_provider = build_token_provider()
+quota = build_quota_backend()
 
 
-def _reset_window_if_needed() -> None:
-    global _used_tokens, _window_start
-    # Simple rolling 24h window for local tests.
-    if time.time() - _window_start >= 86400:
-        _used_tokens = 0
-        _window_start = time.time()
+def _inc(metric: str, n: int = 1) -> None:
+    with _metrics_lock:
+        _metrics[metric] = int(_metrics.get(metric, 0)) + n
 
 
-def quota_snapshot() -> dict[str, Any]:
-    with _lock:
-        _reset_window_if_needed()
-        limit = QUOTA_TOKENS_DAY
-        return {
-            "user_id": USER_ID,
-            "plan_id": PLAN_ID,
-            "used_tokens": _used_tokens,
-            "limit_tokens": limit if limit > 0 else None,
-            "remaining_tokens": None if limit <= 0 else max(0, limit - _used_tokens),
-            "reset_at": int(_window_start + 86400),
-            "mode": MODE,
-            "model_id": MODEL_ID,
-        }
+def _inc_feature(bucket: str, feature: str, n: int = 1) -> None:
+    feat = (feature or "chat").strip().lower() or "chat"
+    if feat not in ("chat", "inline", "agent"):
+        feat = "chat"
+    with _metrics_lock:
+        m = _metrics.setdefault(bucket, {})
+        m[feat] = int(m.get(feat, 0)) + n
 
 
-def check_and_reserve(estimate: int) -> Optional[str]:
-    """Return error message if denied, else None."""
-    global _used_tokens
-    if QUOTA_TOKENS_DAY <= 0:
-        return None
-    with _lock:
-        _reset_window_if_needed()
-        if _used_tokens + max(estimate, 0) > QUOTA_TOKENS_DAY:
-            return (
-                f"LLM daily quota exceeded (plan={PLAN_ID}, "
-                f"used={_used_tokens}, limit={QUOTA_TOKENS_DAY}). "
-                f"Resets at unix={int(_window_start + 86400)}."
-            )
-        return None
+def redact_secrets(text: str) -> str:
+    """Strip Bearer tokens / Authorization headers from log lines (LLM-S16.4)."""
+    import re
 
-
-def commit_tokens(n: int) -> None:
-    global _used_tokens
-    if n <= 0:
-        return
-    with _lock:
-        _reset_window_if_needed()
-        _used_tokens += n
+    out = re.sub(r"(?i)(authorization\s*[:=]\s*)bearer\s+\S+", r"\1Bearer [REDACTED]", text)
+    out = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-+/=]+", "Bearer [REDACTED]", out)
+    return out
 
 
 def estimate_tokens_from_messages(messages: list) -> int:
@@ -125,18 +112,16 @@ def mock_reply_text(messages: list) -> str:
     snippet = (last_user or "(empty)").strip().replace("\n", " ")
     if len(snippet) > 120:
         snippet = snippet[:117] + "..."
+    snap = quota.snapshot(USER_ID, groups=GROUPS) if hasattr(quota, "snapshot") else {}
+    plan = snap.get("plan_id", HINT_PLAN)
     return (
-        f"[local-dev mock · plan={PLAN_ID} · user={USER_ID}]\n"
+        f"[local-dev mock · plan={plan} · user={USER_ID}]\n"
         f"Echo: {snippet}\n\n"
-        "```python\n"
-        "print('hello from local LLM sidecar')\n"
-        "```\n"
+        "```python\nprint('hello from local LLM sidecar')\n```\n"
     )
 
 
-def build_completion_payload(
-    model: str, content: str, prompt_tokens: int, completion_tokens: int
-) -> dict[str, Any]:
+def build_completion_payload(model: str, content: str, pt: int, ct: int) -> dict[str, Any]:
     return {
         "id": f"chatcmpl-local-{int(time.time() * 1000)}",
         "object": "chat.completion",
@@ -150,16 +135,15 @@ def build_completion_payload(
             }
         ],
         "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
         },
     }
 
 
-def stream_chunks(model: str, content: str, prompt_tokens: int, completion_tokens: int):
+def stream_chunks(model: str, content: str, pt: int, ct: int):
     cid = f"chatcmpl-local-{int(time.time() * 1000)}"
-    # role chunk
     yield {
         "id": cid,
         "object": "chat.completion.chunk",
@@ -167,16 +151,16 @@ def stream_chunks(model: str, content: str, prompt_tokens: int, completion_token
         "model": model,
         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
     }
-    # content in small pieces for NBI streaming UX
     step = max(8, len(content) // 6) or 8
     for i in range(0, len(content), step):
-        piece = content[i : i + step]
         yield {
             "id": cid,
             "object": "chat.completion.chunk",
             "created": int(time.time()),
             "model": model,
-            "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
+            "choices": [
+                {"index": 0, "delta": {"content": content[i : i + step]}, "finish_reason": None}
+            ],
         }
     yield {
         "id": cid,
@@ -184,39 +168,83 @@ def stream_chunks(model: str, content: str, prompt_tokens: int, completion_token
         "created": int(time.time()),
         "model": model,
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
     }
 
 
-def proxy_upstream(body: bytes, stream: bool) -> tuple[int, dict, bytes]:
+def _ssl_context() -> Optional[ssl.SSLContext]:
+    if not UPSTREAM_VERIFY_TLS:
+        log.warning("UPSTREAM_VERIFY_TLS=0 — TLS verification disabled (sidecar only)")
+        return ssl._create_unverified_context()
+    if CA_BUNDLE:
+        ctx = ssl.create_default_context(cafile=CA_BUNDLE)
+        return ctx
+    return ssl.create_default_context()
+
+
+def get_bearer(force_refresh: bool = False) -> str:
+    try:
+        return token_provider.get_token(force_refresh=force_refresh).access_token
+    except Exception:
+        _inc("mint_failures_total")
+        raise
+
+
+def proxy_upstream(body: bytes) -> tuple[int, bytes]:
     if not UPSTREAM_BASE_URL:
         raise RuntimeError("UPSTREAM_BASE_URL is required in proxy mode")
     url = f"{UPSTREAM_BASE_URL}/chat/completions"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {UPSTREAM_API_KEY or 'unused'}",
+        "Authorization": f"Bearer {get_bearer()}",
     }
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    ctx = None
-    if urlparse(url).scheme == "https" and not UPSTREAM_VERIFY_TLS:
-        ctx = ssl._create_unverified_context()
+    ctx = _ssl_context() if urlparse(url).scheme == "https" else None
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=120) as resp:
-            raw = resp.read()
-            return resp.status, dict(resp.headers.items()), raw
+            return resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers.items()), e.read()
+        if e.code == 401:
+            # One forced refresh then retry (LLM-S03.2)
+            log.warning("upstream 401 — forcing token refresh")
+            headers["Authorization"] = f"Bearer {get_bearer(force_refresh=True)}"
+            req2 = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req2, context=ctx, timeout=120) as resp:
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as e2:
+                return e2.code, e2.read()
+        return e.code, e.read()
+
+
+def quota_check(estimate: int, model: str, feature: str = "chat") -> Any:
+    return quota.check(
+        username=USER_ID,
+        estimate_tokens=estimate,
+        model=model,
+        groups=GROUPS,
+        hint_plan=HINT_PLAN,
+        feature=feature,
+    )
+
+
+def quota_commit(tokens: int, model: str, feature: str) -> None:
+    if hasattr(quota, "commit"):
+        quota.commit(
+            username=USER_ID,
+            tokens=tokens,
+            model=model,
+            feature=feature,
+            groups=GROUPS,
+        )
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write(f"[sidecar] {self.address_string()} {fmt % args}\n")
+        msg = redact_secrets(fmt % args)
+        sys.stderr.write(f"[sidecar] {self.address_string()} {msg}\n")
 
     def _send(self, code: int, payload: Any, content_type: str = "application/json") -> None:
         if isinstance(payload, (dict, list)):
@@ -235,25 +263,81 @@ class Handler(BaseHTTPRequestHandler):
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
         raw = self.rfile.read(length) if length else b"{}"
-        if not raw:
-            return {}
-        return json.loads(raw.decode("utf-8"))
+        return json.loads(raw.decode("utf-8") or "{}")
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path in ("/healthz", "/health"):
+            warm = True
+            try:
+                get_bearer()
+            except Exception as exc:  # noqa: BLE001
+                warm = False
+                self._send(
+                    503,
+                    {"status": "degraded", "token_warm": False, "error": str(exc)[:200]},
+                )
+                return
             self._send(
                 200,
                 {
                     "status": "ok",
                     "mode": MODE,
+                    "token_provider": os.environ.get("TOKEN_PROVIDER", "mock"),
+                    "token_warm": warm,
                     "uptime_s": int(time.time() - _started_at),
                     "user_id": USER_ID,
+                    "groups": GROUPS,
                 },
             )
             return
         if path in ("/quota", "/v1/quota"):
-            self._send(200, quota_snapshot())
+            if hasattr(quota, "snapshot"):
+                snap = quota.snapshot(USER_ID, groups=GROUPS)
+            else:
+                snap = quota.snapshot(USER_ID, groups=GROUPS)
+            snap["mode"] = MODE
+            snap["model_id"] = MODEL_ID
+            self._send(200, snap)
+            return
+        if path in ("/metrics",):
+            with _metrics_lock:
+                lines = [
+                    "# HELP nbi_llm_requests_total LLM completion requests",
+                    "# TYPE nbi_llm_requests_total counter",
+                    f'nbi_llm_requests_total{{user="{USER_ID}"}} {_metrics["requests_total"]}',
+                    "# HELP nbi_llm_tokens_total LLM tokens committed",
+                    "# TYPE nbi_llm_tokens_total counter",
+                    f'nbi_llm_tokens_total{{user="{USER_ID}"}} {_metrics["tokens_total"]}',
+                    "# HELP nbi_llm_denials_total Quota denials",
+                    "# TYPE nbi_llm_denials_total counter",
+                    f'nbi_llm_denials_total{{user="{USER_ID}"}} {_metrics["denials_total"]}',
+                    "# HELP nbi_llm_soft_cap_hits_total Soft-cap (≥80%) observations (alert only)",
+                    "# TYPE nbi_llm_soft_cap_hits_total counter",
+                    f'nbi_llm_soft_cap_hits_total{{user="{USER_ID}"}} {_metrics["soft_cap_hits_total"]}',
+                    "# HELP nbi_llm_upstream_errors_total Upstream errors",
+                    "# TYPE nbi_llm_upstream_errors_total counter",
+                    f"nbi_llm_upstream_errors_total {_metrics['upstream_errors_total']}",
+                    "# HELP nbi_llm_mint_failures_total Token mint failures",
+                    "# TYPE nbi_llm_mint_failures_total counter",
+                    f"nbi_llm_mint_failures_total {_metrics['mint_failures_total']}",
+                    "# HELP nbi_llm_requests_by_feature_total Requests by X-NBI-Feature",
+                    "# TYPE nbi_llm_requests_by_feature_total counter",
+                ]
+                for feat, n in sorted((_metrics.get("requests_by_feature") or {}).items()):
+                    lines.append(
+                        f'nbi_llm_requests_by_feature_total{{user="{USER_ID}",feature="{feat}"}} {n}'
+                    )
+                lines += [
+                    "# HELP nbi_llm_tokens_by_feature_total Tokens by X-NBI-Feature",
+                    "# TYPE nbi_llm_tokens_by_feature_total counter",
+                ]
+                for feat, n in sorted((_metrics.get("tokens_by_feature") or {}).items()):
+                    lines.append(
+                        f'nbi_llm_tokens_by_feature_total{{user="{USER_ID}",feature="{feat}"}} {n}'
+                    )
+            body = ("\n".join(lines) + "\n").encode("utf-8")
+            self._send(200, body, content_type="text/plain; version=0.0.4")
             return
         if path in ("/v1/models", "/models"):
             self._send(
@@ -272,6 +356,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": {"message": f"not found: {path}", "type": "not_found"}})
             return
 
+        t0 = time.time()
         try:
             req = self._read_json()
         except json.JSONDecodeError:
@@ -281,33 +366,62 @@ class Handler(BaseHTTPRequestHandler):
         messages = req.get("messages") or []
         model = req.get("model") or MODEL_ID
         stream = bool(req.get("stream"))
+        feature = self.headers.get("X-NBI-Feature", "chat")
         estimate = estimate_tokens_from_messages(messages)
 
-        denied = check_and_reserve(estimate)
-        if denied:
+        try:
+            decision = quota_check(estimate, model, feature=feature)
+        except Exception as exc:  # noqa: BLE001
+            # Fail closed when Quota Service / store is unreachable (LLM-S18.2)
+            log.error("quota check failed (fail-closed): %s", exc)
+            self._send(
+                503,
+                {
+                    "error": {
+                        "message": "quota backend unavailable; refusing LLM request",
+                        "type": "quota_unavailable",
+                        "code": "quota_unavailable",
+                    }
+                },
+            )
+            return
+        if not decision.allowed:
+            _inc("denials_total")
             self._send(
                 429,
                 {
                     "error": {
-                        "message": denied,
+                        "message": decision.message or "quota exceeded",
                         "type": "quota_exceeded",
                         "code": "quota_exceeded",
+                        "plan": decision.plan_id,
+                        "reset_at": decision.reset_at,
                     }
                 },
             )
             return
 
+        _inc("requests_total")
+        _inc_feature("requests_by_feature", feature)
+        if decision.soft_cap_hit:
+            _inc("soft_cap_hits_total")
+            log.warning(
+                "soft cap (≥80%%) for user=%s plan=%s feature=%s (alert only; request allowed)",
+                USER_ID,
+                decision.plan_id,
+                feature,
+            )
+
         if MODE == "proxy":
-            body = json.dumps(req).encode("utf-8")
             try:
-                status, _headers, raw = proxy_upstream(body, stream)
+                status, raw = proxy_upstream(json.dumps(req).encode("utf-8"))
             except Exception as exc:  # noqa: BLE001
+                _inc("upstream_errors_total")
                 self._send(
                     502,
                     {"error": {"message": f"upstream error: {exc}", "type": "upstream_error"}},
                 )
                 return
-            # Best-effort usage commit for non-stream JSON
             used = estimate
             if not stream:
                 try:
@@ -316,19 +430,26 @@ class Handler(BaseHTTPRequestHandler):
                     used = int(usage.get("total_tokens") or estimate)
                 except Exception:  # noqa: BLE001
                     pass
-            commit_tokens(used)
+            quota_commit(used, model, feature)
+            _inc("tokens_total", used)
+            _inc_feature("tokens_by_feature", feature, used)
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-NBI-Latency-Ms", str(int((time.time() - t0) * 1000)))
+            self.send_header("X-NBI-Feature", feature)
+            if decision.soft_cap_hit:
+                self.send_header("X-NBI-Quota-Soft-Cap", "1")
             self.end_headers()
             self.wfile.write(raw)
             return
 
-        # mock mode
         content = mock_reply_text(messages)
-        prompt_tokens = estimate
-        completion_tokens = max(1, len(content) // 4)
-        commit_tokens(prompt_tokens + completion_tokens)
+        pt, ct = estimate, max(1, len(content) // 4)
+        used = pt + ct
+        quota_commit(used, model, feature)
+        _inc("tokens_total", used)
+        _inc_feature("tokens_by_feature", feature, used)
 
         if stream:
             self.send_response(200)
@@ -336,39 +457,58 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
-            for chunk in stream_chunks(model, content, prompt_tokens, completion_tokens):
-                line = f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
-                self.wfile.write(line)
+            for chunk in stream_chunks(model, content, pt, ct):
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
                 self.wfile.flush()
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
             return
 
-        self._send(
-            200,
-            build_completion_payload(model, content, prompt_tokens, completion_tokens),
-        )
+        payload = build_completion_payload(model, content, pt, ct)
+        # Soft-cap is informational; include flag in JSON for local UX/tests.
+        if decision.soft_cap_hit:
+            payload["nbi_quota_soft_cap"] = True
+        self._send(200, payload)
 
 
 def main() -> int:
     if MODE not in ("mock", "proxy"):
-        print(f"ERROR: MODE must be mock|proxy, got {MODE!r}", file=sys.stderr)
+        log.error("MODE must be mock|proxy, got %r", MODE)
         return 2
     if MODE == "proxy" and not UPSTREAM_BASE_URL:
-        print("ERROR: UPSTREAM_BASE_URL required for MODE=proxy", file=sys.stderr)
+        log.error("UPSTREAM_BASE_URL required for MODE=proxy")
+        return 2
+    if HOST not in ("127.0.0.1", "localhost", "::1") and os.environ.get(
+        "SIDECAR_ALLOW_NON_LOOPBACK", ""
+    ) != "1":
+        log.error(
+            "Refusing to bind %s (loopback only). Set SIDECAR_ALLOW_NON_LOOPBACK=1 to override.",
+            HOST,
+        )
         return 2
 
-    # Safety: only loopback by default
+    # Warm token at start (LLM-S02.2)
+    try:
+        get_bearer()
+        log.info("token warm OK")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("token warm failed at startup: %s", exc)
+
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(
-        f"[sidecar] listening on http://{HOST}:{PORT}  mode={MODE}  "
-        f"model={MODEL_ID}  user={USER_ID}  quota={QUOTA_TOKENS_DAY or 'unlimited'}",
-        flush=True,
+    log.info(
+        "listening on http://%s:%s mode=%s model=%s user=%s token_provider=%s quota=%s",
+        HOST,
+        PORT,
+        MODE,
+        MODEL_ID,
+        USER_ID,
+        os.environ.get("TOKEN_PROVIDER", "mock"),
+        os.environ.get("QUOTA_BACKEND", "local"),
     )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n[sidecar] stopped", flush=True)
+        log.info("stopped")
     return 0
 
 

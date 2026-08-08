@@ -63,29 +63,40 @@ python_is_310_plus() {
 
 pick_python() {
   if [[ -n "${PYTHON:-}" ]]; then
-    command -v "$PYTHON" >/dev/null 2>&1 || die "PYTHON=$PYTHON not found"
+    # Accept absolute path or command name
+    if [[ -x "$PYTHON" ]]; then
+      :
+    else
+      command -v "$PYTHON" >/dev/null 2>&1 || die "PYTHON=$PYTHON not found"
+    fi
     python_is_310_plus "$PYTHON" || die "PYTHON=$PYTHON must be >= 3.10"
+    # Prefer documenting 3.12+ for this project's local-dev / Hub spike.
+    if ! "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+      echo "WARNING: PYTHON=$PYTHON is < 3.12; local-dev scripts require >= 3.12" >&2
+    fi
     echo "$PYTHON"
     return
   fi
   local cand
-  for cand in python3.12 python3.11 python3.10; do
-    if command -v "$cand" >/dev/null 2>&1 && python_is_310_plus "$cand"; then
-      echo "$cand"
-      return
+  # Prefer known conda nbi-jl45 (3.12) before PATH python3.12
+  for cand in \
+    "/Users/bl44001/miniconda3/envs/nbi-jl45/bin/python3.12" \
+    "${HOME}/miniconda3/envs/nbi-jl45/bin/python3.12" \
+    python3.12
+  do
+    if [[ -x "$cand" ]] || command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+        if [[ -x "$cand" ]]; then echo "$cand"; else command -v "$cand"; fi
+        return
+      fi
     fi
   done
-  if command -v python3 >/dev/null 2>&1 && python_is_310_plus python3; then
-    echo python3
-    return
-  fi
-  # Fall back: let ensure_env create a conda env when --conda-env is set
-  # or when conda is the only viable option.
+  # Do NOT fall back to system python3 (often 3.9 on macOS).
   if [[ -n "$CONDA_ENV_NAME" ]] || command -v conda >/dev/null 2>&1; then
     echo ""
     return
   fi
-  die "Need Python 3.10+ (python3.12/3.11/3.10). Install one, set PYTHON=..., or pass --conda-env NAME."
+  die "Need Python >= 3.12. Use: conda activate nbi-jl45  or  PYTHON=.../python3.12"
 }
 
 check_host_tools() {

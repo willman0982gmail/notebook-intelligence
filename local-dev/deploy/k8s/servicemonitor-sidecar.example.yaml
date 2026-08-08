@@ -1,0 +1,30 @@
+# Example: scrape per-pod sidecar /metrics via a headless Service + annotations,
+# OR use a Prometheus podMonitor if the sidecar is only on 127.0.0.1 (typical).
+#
+# IMPORTANT: The auth sidecar binds loopback inside each user pod, so cluster
+# Prometheus cannot scrape it directly. Prefer one of:
+#   A) sidecar dual-export via a small localhost→pushgateway sidecar (not in-tree), or
+#   B) scrape from a DaemonSet/agent that execs into pods (ops-specific), or
+#   C) have Jupyter/NBI expose aggregated metrics (future).
+#
+# This manifest documents option A via an optional metrics-bridge Service that
+# your image may expose on a non-loopback port when SIDECAR_ALLOW_NON_LOOPBACK=1
+# AND METRICS_BIND=0.0.0.0 (not recommended for chat API — metrics-only port).
+#
+# For most installs: export CSV via CronJob (usage-export-cronjob.yaml) and
+# rely on Quota Service metrics if you add them later.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nbi-quota
+  namespace: jhub
+  labels:
+    app: nbi-quota
+spec:
+  selector:
+    matchLabels:
+      app: nbi-quota
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

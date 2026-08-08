@@ -1,10 +1,12 @@
 # Copyright (c) Mehmet Bektas <mbektasgh@outlook.com>
 
+from __future__ import annotations
+
 import copy
 import json
 import re
 from typing import Any
-from notebook_intelligence.api import ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, CancelToken, ChatResponse, CompletionContext, LLMProviderProperty
+from notebook_intelligence.api import ChatModel, EmbeddingModel, InlineCompletionModel, LLMProvider, CancelToken, ChatResponse, CompletionContext, LLMProviderProperty, MarkdownData
 
 INLINE_COMPLETION_SYSTEM_PROMPT = """You are a code completion assistant. Your task is to generate intelligent autocomplete suggestions for the code at the cursor position for given language and active file type. This is not an interactive session, don't ask for clarifying questions, always generate a suggestion. Don't include any explanations for your response, just generate the code. Don't return any thinking or reasoning, just generate the code. You are given a code snippet with a prefix and a suffix. You need to generate a suggestion for the code that fits best in place of <CURSOR/>. You should return only the code that fits best in place of <CURSOR/>. You should provide multiline code if needed. Enclose the code in triple backticks, just return the code in language. You should not return any other text, just the code. DO NOT INCLUDE THE PREFIX OR SUFFIX IN THE RESPONSE. .ipynb files are Jupyter notebook files and for notebook files, you generate suggestions for a cell within the notebook. A cell can be a code cell with code or a markdown cell with markdown text. If the language is markdown, only return markdown text. If you need to install a Python package within a notebook cell code (for .ipynb files), use %pip install <package_name> instead of !pip install <package_name>. Follow the tags very carefully for proper spacing and indentations."""
 
@@ -22,6 +24,81 @@ def sanitize_tools_for_openai_compatible(tools: list[dict] | None) -> list[dict]
         if isinstance(function_schema, dict):
             function_schema.pop("strict", None)
     return sanitized_tools
+
+
+def _extract_error_fields(body: Any) -> tuple[str | None, str | None]:
+    if isinstance(body, str) and body.strip():
+        try:
+            body = json.loads(body)
+        except Exception:  # noqa: BLE001
+            return body[:500], None
+    if not isinstance(body, dict):
+        return None, None
+    err = body.get("error") if isinstance(body.get("error"), (dict, str)) else body
+    if isinstance(err, str):
+        return err[:500], None
+    if isinstance(err, dict):
+        return (
+            (err.get("message") or err.get("Message") or None),
+            (err.get("type") or err.get("code") or None),
+        )
+    return None, None
+
+
+def format_openai_compatible_error(exc: BaseException) -> str:
+    """User-facing message for gateway / quota failures (LLM-S14)."""
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    message, err_type = _extract_error_fields(body)
+    if not message:
+        message = str(exc)[:500] or exc.__class__.__name__
+
+    # Sidecar 429 body may include plan / reset_at alongside error.message
+    extras: list[str] = []
+    err_obj = None
+    if isinstance(body, dict):
+        err_obj = body.get("error") if isinstance(body.get("error"), dict) else body
+    if isinstance(err_obj, dict):
+        plan = err_obj.get("plan") or err_obj.get("plan_id")
+        reset_at = err_obj.get("reset_at")
+        if plan:
+            extras.append(f"plan={plan}")
+        if reset_at is not None:
+            try:
+                import datetime
+
+                extras.append(
+                    "resets "
+                    + datetime.datetime.fromtimestamp(int(reset_at), tz=datetime.timezone.utc)
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M %Z")
+                )
+            except (TypeError, ValueError, OSError):
+                extras.append(f"reset_at={reset_at}")
+
+    detail = message
+    if extras:
+        detail = f"{message} ({'; '.join(extras)})"
+
+    if status == 429 or err_type in ("quota_exceeded", "rate_limit_exceeded", "quota_unavailable"):
+        return f"LLM quota or rate limit exceeded. {detail}"
+    if status in (401, 403):
+        return f"LLM authentication failed ({status}). {detail}"
+    if status == 503 and err_type == "quota_unavailable":
+        return f"LLM quota service unavailable. {detail}"
+    if status:
+        return f"LLM request failed (HTTP {status}). {detail}"
+    return f"LLM request failed. {detail}"
+
+
+def _openai_client(base_url: str | None, api_key: str, feature: str):
+    from openai import OpenAI
+
+    return OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        default_headers={"X-NBI-Feature": feature},
+    )
 
 
 class OpenAICompatibleChatModel(ChatModel):
@@ -54,42 +131,57 @@ class OpenAICompatibleChatModel(ChatModel):
             return DEFAULT_CONTEXT_WINDOW
 
     def completions(self, messages: list[dict], tools: list[dict] = None, response: ChatResponse = None, cancel_token: CancelToken = None, options: dict = {}) -> Any:
-        from openai import OpenAI, omit
+        from openai import omit
         stream = response is not None
         model_id = self.get_property("model_id").value
         base_url_prop = self.get_property("base_url")
         base_url = base_url_prop.value if base_url_prop is not None else None
         base_url = base_url if base_url.strip() != "" else None
         api_key = self.get_property("api_key").value
+        feature = options.get("nbi_feature") or "chat"
 
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=messages.copy(),
-            tools=sanitize_tools_for_openai_compatible(tools) or omit,
-            tool_choice=options.get("tool_choice", omit),
-            stream=stream,
-        )
+        client = _openai_client(base_url, api_key, feature)
+        try:
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=messages.copy(),
+                tools=sanitize_tools_for_openai_compatible(tools) or omit,
+                tool_choice=options.get("tool_choice", omit),
+                stream=stream,
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = format_openai_compatible_error(exc)
+            if response is not None:
+                response.stream(MarkdownData(f"**{msg}**"))
+                response.finish()
+                return None
+            raise
 
         if stream:
-            for chunk in resp:
-                if len(chunk.choices) == 0:
-                    continue
-                delta = chunk.choices[0].delta
-                reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
-                if reasoning is not None:
-                    reasoning = str(reasoning)
-                response.stream({
-                        "choices": [{
-                            "delta": {
-                                "role": delta.role,
-                                "content": delta.content,
-                                "reasoning_content": reasoning
-                            }
-                        }]
-                    })
-            response.finish()
-            return
+            try:
+                for chunk in resp:
+                    if len(chunk.choices) == 0:
+                        continue
+                    delta = chunk.choices[0].delta
+                    reasoning = getattr(delta, 'reasoning_content', None) or getattr(delta, 'reasoning', None)
+                    if reasoning is not None:
+                        reasoning = str(reasoning)
+                    response.stream({
+                            "choices": [{
+                                "delta": {
+                                    "role": delta.role,
+                                    "content": delta.content,
+                                    "reasoning_content": reasoning
+                                }
+                            }]
+                        })
+                response.finish()
+                return
+            except Exception as exc:  # noqa: BLE001
+                msg = format_openai_compatible_error(exc)
+                response.stream(MarkdownData(f"**{msg}**"))
+                response.finish()
+                return
         else:
             json_resp = json.loads(resp.model_dump_json())
             # Capture reasoning fields if they exist as extra attributes
@@ -152,27 +244,29 @@ class OpenAICompatibleInlineCompletionModel(InlineCompletionModel):
         if cancel_token.is_cancel_requested:
             return ''
 
-        from openai import OpenAI
-
         model_id = self.get_property("model_id").value
         base_url_prop = self.get_property("base_url")
         base_url = base_url_prop.value if base_url_prop is not None else None
         base_url = base_url if base_url and base_url.strip() != "" else None
         api_key = self.get_property("api_key").value
 
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {"role": "system", "content": INLINE_COMPLETION_SYSTEM_PROMPT},
-                {"role": "user", "content": f"""Generate a single suggestion that fits best in place of cursor. The code is below in between <CODE> tags and <CURSOR/> is the placeholder for the code to be filled in. Current language is {language} and the active file is {filename}.
+        client = _openai_client(base_url, api_key, "inline")
+        try:
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": INLINE_COMPLETION_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"""Generate a single suggestion that fits best in place of cursor. The code is below in between <CODE> tags and <CURSOR/> is the placeholder for the code to be filled in. Current language is {language} and the active file is {filename}.
 
 <CODE><PREFIX>{prefix}</PREFIX><CURSOR/><SUFFIX>{suffix}</SUFFIX></CODE>
 """}
-            ],
-            max_tokens=1000,
-            stream=False,
-        )
+                ],
+                max_tokens=1000,
+                stream=False,
+            )
+        except Exception:  # noqa: BLE001
+            # Inline completer should fail quietly (LLM-S14.3).
+            return ''
 
         if cancel_token.is_cancel_requested:
             return ''
@@ -189,7 +283,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
     @property
     def id(self) -> str:
         return "openai-compatible"
-    
+
     @property
     def name(self) -> str:
         return "OpenAI Compatible"
@@ -197,11 +291,11 @@ class OpenAICompatibleLLMProvider(LLMProvider):
     @property
     def chat_models(self) -> list[ChatModel]:
         return [self._chat_model]
-    
+
     @property
     def inline_completion_models(self) -> list[InlineCompletionModel]:
         return [self._inline_completion_model]
-    
+
     @property
     def embedding_models(self) -> list[EmbeddingModel]:
         return []

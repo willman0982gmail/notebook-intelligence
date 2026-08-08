@@ -1,0 +1,42 @@
+# Example PrometheusRule / alert rules for NBI LLM sidecar (LLM-S14.4 / S16.3).
+# Import into your cluster alerting stack; adjust job/namespace labels.
+groups:
+  - name: nbi-llm-sidecar
+    rules:
+      - alert: NbiLlmSoftCapBreaches
+        expr: increase(nbi_llm_soft_cap_hits_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Users approaching LLM daily quota (≥80%)'
+          description: >-
+            Soft-cap hits increased. Requests are still allowed until 100%.
+            Check top users via /quota and Grafana NBI LLM Sidecar dashboard.
+
+      - alert: NbiLlmQuotaDenialSpike
+        expr: increase(nbi_llm_denials_total[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'LLM quota denials spiking'
+          description: 'Many 429 quota_exceeded responses. Review plans or boost via Quota Service.'
+
+      - alert: NbiLlmMintFailures
+        expr: increase(nbi_llm_mint_failures_total[10m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'LLM auth token mint failures'
+          description: 'IdP/JAR mint failing. Sidecar /healthz may show token_warm=false.'
+
+      - alert: NbiLlmUpstreamErrors
+        expr: increase(nbi_llm_upstream_errors_total[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'LLM gateway upstream errors'
+          description: 'Sidecar proxy mode failing to reach the corporate LLM gateway.'
