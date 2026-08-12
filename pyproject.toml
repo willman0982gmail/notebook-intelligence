@@ -37,6 +37,10 @@ dependencies = [
     # does not expose the proxy server endpoints, so the gap is
     # latent-not-exposed; bump the lower bound when 1.83.10 ships.
     "litellm>=1.83.7",
+    # litellm 1.83+ hard-caps importlib-metadata at <9; jupyter-ai (Elyra)
+    # only lower-bounds it, so an unconstrained shared env can pull 9.x and
+    # break litellm. Keep the compatible range explicit for stack installs.
+    "importlib-metadata>=8.0.0,<9.0",
     "openai",
     "ollama",
     # The official Anthropic MCP Python SDK. NBI used to import the
