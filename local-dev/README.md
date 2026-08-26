@@ -149,6 +149,7 @@ See `hub/jupyterhub_config.snippet.py` and `deploy/entrypoint.sh`.
 
 ## Docs
 
+- Handoff: [`docs/handoff-internal-llm-gateway.md`](../docs/handoff-internal-llm-gateway.md)
 - Design: [`docs/internal-llm-gateway-integration.md`](../docs/internal-llm-gateway-integration.md)
 - Stories: [`docs/internal-llm-gateway-stories.md`](../docs/internal-llm-gateway-stories.md)
 - Runbook: [`docs/runbook.md`](docs/runbook.md)
