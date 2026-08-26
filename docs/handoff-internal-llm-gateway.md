@@ -294,14 +294,16 @@ Break-glass to temporarily re-enable Copilot: `runbook.md` § Break-glass (revok
 ## 11. Documentation index (reading order)
 
 1. **This document** — handoff overview
-2. [`internal-llm-gateway-integration.md`](internal-llm-gateway-integration.md) — requirements and architecture spec
-3. [`internal-llm-gateway-stories.md`](internal-llm-gateway-stories.md) — stories and completion status
-4. [`local-dev/README.md`](../local-dev/README.md) — local development entry
-5. [`local-dev/docs/go-live-checklist.md`](../local-dev/docs/go-live-checklist.md) — go-live checklist
-6. [`local-dev/docs/remaining-tasks.md`](../local-dev/docs/remaining-tasks.md) — remaining work
-7. [`local-dev/docs/runbook.md`](../local-dev/docs/runbook.md) — operations
-8. [`admin-guide.md`](admin-guide.md) — NBI admin (`disabled_providers`, `llm-quota`)
-9. ADRs: [`adr-sidecar-vs-plugin.md`](../local-dev/docs/adr-sidecar-vs-plugin.md), [`adr-central-gateway-keys.md`](../local-dev/docs/adr-central-gateway-keys.md)
+2. [`ai-factory-quick-demo.md`](ai-factory-quick-demo.md) — fastest Hub demo vs AI Factory (Path A/B + Zscaler/`NO_PROXY`)
+3. [`ai-factory-k8s-deployment.md`](ai-factory-k8s-deployment.md) — full K8s deployment (images, Hub, Quota, NetworkPolicy)
+4. [`internal-llm-gateway-integration.md`](internal-llm-gateway-integration.md) — requirements and architecture spec
+5. [`internal-llm-gateway-stories.md`](internal-llm-gateway-stories.md) — stories and completion status
+6. [`local-dev/README.md`](../local-dev/README.md) — local development entry
+7. [`local-dev/docs/go-live-checklist.md`](../local-dev/docs/go-live-checklist.md) — go-live checklist
+8. [`local-dev/docs/remaining-tasks.md`](../local-dev/docs/remaining-tasks.md) — remaining work
+9. [`local-dev/docs/runbook.md`](../local-dev/docs/runbook.md) — operations
+10. [`admin-guide.md`](admin-guide.md) — NBI admin (`disabled_providers`, `llm-quota`)
+11. ADRs: [`adr-sidecar-vs-plugin.md`](../local-dev/docs/adr-sidecar-vs-plugin.md), [`adr-central-gateway-keys.md`](../local-dev/docs/adr-central-gateway-keys.md)
 
 ---
 
