@@ -158,3 +158,5 @@ benchmarks/claude_perf/screenshots/
 
 # Local corp gateway probe secrets
 local-dev/corp-probe.env
+
+.trae/

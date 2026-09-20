@@ -1,0 +1,78 @@
+# -----------------------------------------------------------------------------
+# .dockerignore — exclude everything not required for the nbi-auth-sidecar image.
+#
+# The sidecar image ONLY needs:
+#   ./nbi_auth_sidecar/*.py   (Python package)
+#   ./Dockerfile              (obviously)
+#   ./README.md               (optional, helpful inside image for operators)
+#
+# Everything else (tests, .pyc, IDE files, temp scripts, secrets) is excluded
+# aggressively so:  (a) image build context stays tiny, and (b) there is
+# ZERO risk of accidentally baking a developer-local secret (e.g.
+# .env file, pre-secret token-tool.jar) into the image.
+# -----------------------------------------------------------------------------
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Build context of other images in the monorepo
+../llm-gateway-sidecar/
+../quota_service/
+../hub/
+../k8s/
+../grafana/
+../prometheus/
+
+# Local secrets — NEVER ship these.  (K8s Secret mounts them at runtime.)
+**/*.jks
+**/*.jar
+**/secret*
+**/.env
+**/.env.*
+**/credentials*
+**/token-tool*
+**/*keystore*
+**/*truststore*
+**/*.p12
+**/*.pfx
+**/*.crt
+**/*.pem  (EXCEPT CA bundles — but we rely on ca-certificates apt package)
+
+# Temporary runtime state
+**/nbi-token-state.json
+**/nbi-runtime-env.json
+**/config.json
+**/*.log
+**/*.tmp
+
+# Docker build outputs
+.docker/
+*.tar
+*.tar.gz
+Dockerfile.*
+!Dockerfile
+
+# CI / IDE
+.github/
+.vscode/
+.trae/
+.git/
+.gitignore
+.DS_Store
+.idea/
+
+# Smoke test / local scratch
+*.sh.bak
+smoke-test-local/
+scratch/
+tmp/
+build/
+dist/
+helm/
+charts/

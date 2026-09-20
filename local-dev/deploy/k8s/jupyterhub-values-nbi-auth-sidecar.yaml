@@ -1,0 +1,304 @@
+# ---------------------------------------------------------------------------
+# nbi-auth-sidecar Helm values overlay (for upstream Z2JK jupyterhub v3.3.0)
+# ---------------------------------------------------------------------------
+#
+# Merge this file into your umbrella values.yaml, or pass it on the helm
+# command line:
+#
+#   helm upgrade -i jhub jupyterhub/jupyterhub --version 3.3.0 \
+#       --namespace jhub --create-namespace \
+#       -f ./charts/nbi-auth-sidecar/values.yaml \
+#       -f ./path/to/your/site-values.yaml
+#
+# All values below are OVERRIDEABLE via site-values.yaml.  The defaults
+# match the production SCB GDP deployment:
+#   * sidecar image:  registry.scbdev.net/gdp/nbi-auth-sidecar:1.0.0
+#   * AI Factory upstream:  https://gateway.scaifactory.dev.azure.scbdev.net/v1
+#   * Default model:  databricks/gdp-gpt4o
+#   * Secret name for credentials:  nbi-llm-auth  (created by separate
+#     SealedSecret / ExternalSecret.  This chart does NOT contain secrets.)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 1.  hub.*  —  injects the pre_spawn_hook Python module + envs into the
+#     JupyterHub hub pod.  The pre_spawn_hook does the actual sidecar pod
+#     mutation for every user spawn.
+# ---------------------------------------------------------------------------
+hub:
+  # ---------------------------------------------------------------------
+  # 1a. hub.extraEnv — static values referenced from pre_spawn_hook.py.
+  #     All of these can be overridden in site-values.yaml; they are
+  #     intentionally not secret (no JKS passwords, no tokens).
+  # ---------------------------------------------------------------------
+  extraEnv:
+    # Default sidecar image tag.  Override via site-values for canary
+    # releases (e.g. `--set singleuser.nbiAuthSidecar.image.tag=1.1.0-rc1`).
+    - name: NBI_AUTH_SIDECAR_IMAGE
+      value: 'registry.scbdev.net/gdp/nbi-auth-sidecar:1.0.0'
+    # Sidecar HTTP bind port.  MUST NOT be changed without a matching
+    # change to the Dockerfile + probes because the K8s httpGet probes
+    # use an explicit `host: 127.0.0.1` on this numeric port.
+    - name: NBI_AUTH_SIDECAR_HTTP_PORT
+      value: '18090'
+    # Default provider / model IDs applied to every pod.  Individual
+    # profiles (see singleuser.profileList) may override these keys.
+    - name: NBI_CHAT_MODEL_PROVIDER
+      value: 'openai_compatible'
+    - name: NBI_CHAT_MODEL_ID
+      value: 'databricks/gdp-gpt4o'
+    - name: NBI_INLINE_COMPLETION_MODEL_PROVIDER
+      value: 'openai_compatible'
+    - name: NBI_INLINE_COMPLETION_MODEL_ID
+      value: 'databricks/gdp-gpt4o'
+    # Leave Claude keys as empty strings on the hub side — the per-user
+    # plan (from quota service) may override them through per-profile
+    # spawner.environment in site-values.
+    - name: NBI_CLAUDE_CHAT_MODEL
+      value: ''
+    - name: NBI_CLAUDE_INLINE_COMPLETION_MODEL
+      value: ''
+    # Upstream AI Factory base URL.  This is mirrored both into the
+    # notebook STRING_OVERRIDE env AND the sidecar minter env.
+    - name: ANTHROPIC_BASE_URL
+      value: 'https://gateway.scaifactory.dev.azure.scbdev.net/v1'
+    # Minter implementation: "jar" = SecureJarTokenMinter (prod default),
+    # "mock" = MockTokenMinter for CI smoke tests.
+    - name: NBI_SIDECAR_MINTER
+      value: 'jar'
+    # Credential file paths inside the K8s secret volume mount.  These
+    # are never baked into the image or git; they are declared here so
+    # the sidecar knows where the secret mount puts them.
+    - name: NBI_JAR_PATH
+      value: '/var/run/nbi-llm-auth/token-tool.jar'
+    - name: NBI_KEYSTORE_JKS
+      value: '/var/run/nbi-llm-auth/keystore.jks'
+    - name: NBI_TRUSTSTORE_JKS
+      value: '/var/run/nbi-llm-auth/aitruststore.jks'
+    - name: NBI_JAVA_SECURITY_PROPERTIES_TMPDIR
+      value: '/tmp'
+    # OIDC static parameters used by SecureJarTokenMinter.  Values here
+    # are the *parameter names* only; passwords / secrets themselves
+    # come in via envFrom.secretRef = nbi-llm-auth at runtime.
+    - name: OIDC_TOKEN_URL
+      valueFrom:
+        secretKeyRef:
+          name: nbi-llm-auth
+          key: oidc_token_url
+          optional: true
+    - name: OIDC_CLIENT_CODE
+      valueFrom:
+        secretKeyRef:
+          name: nbi-llm-auth
+          key: oidc_client_code
+          optional: true
+    - name: OIDC_DOMAIN
+      valueFrom:
+        secretKeyRef:
+          name: nbi-llm-auth
+          key: oidc_domain
+          optional: true
+    - name: JKS_KEYSTORE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: nbi-llm-auth
+          key: jks_keystore_password
+          optional: true
+    - name: JKS_TRUSTSTORE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: nbi-llm-auth
+          key: jks_truststore_password
+          optional: true
+
+  # ---------------------------------------------------------------------
+  # 1b. hub.extraConfig — Python fragments that become part of the hub's
+  #     jupyterhub_config.py.  We inject the pre_spawn_hook factory call.
+  #     NOTE: the pre_spawn_hook.py module itself must be reachable on
+  #     the hub's PYTHONPATH (copy it via the ConfigMap below, or bake
+  #     into a custom hub image).  This extraConfig assumes the module
+  #     lives in /usr/local/lib/python3.11/site-packages/hub/pre_spawn_hook.py
+  #     which matches the COPY line in the hub Dockerfile patch.
+  # ---------------------------------------------------------------------
+  extraConfig:
+    # ------------------------------------------------------------------
+    # 000-nbi-auth-sidecar-hook.py — registers the pre_spawn_hook.
+    # The factory function returns an async coroutine suitable for the
+    # KubeSpawner.pre_spawn_hook traitlet (which accepts sync or async
+    # callables with a single spawner argument).
+    # ------------------------------------------------------------------
+    000-nbi-auth-sidecar-hook.py: |
+      # -*- coding: utf-8 -*-
+      """
+      Install the nbi-auth-sidecar pre_spawn_hook for Z2JK KubeSpawner.
+
+      This Python block runs inside the Hub process's jupyterhub_config.py
+      evaluation.  It MUST NOT import at module level anything beyond the
+      stdlib; the import of make_pre_spawn_hook from the installed helper
+      module is wrapped in try/except so a missing helper module does NOT
+      prevent the hub from starting (it only logs a WARNING and skips
+      sidecar injection — a known-safe graceful degradation).
+      """
+      import os
+      from jupyterhub.utils import maybe_future
+
+      c = get_config()  # noqa: F821 — Z2JK injects `c` into this ns.
+
+      def _nbi_sidecar_enabled() -> bool:
+          """Return True iff env signals sidecar should be injected."""
+          val = os.environ.get("NBI_AUTH_SIDECAR_ENABLE", "true").lower()
+          return val in {"1", "true", "yes", "on"}
+
+      try:
+          from hub.pre_spawn_hook import make_pre_spawn_hook
+      except Exception as _exc:  # pragma: no cover - defensive only
+          import logging as _log
+          _log.getLogger(__name__).warning(
+              "nbi-auth-sidecar: hub.pre_spawn_hook module not importable "
+              "(%s). Sidecar injection SKIPPED. Ensure pre_spawn_hook.py is "
+              "on the hub PYTHONPATH.", _exc,
+          )
+      else:
+          if _nbi_sidecar_enabled():
+              # Build the auth_env dict from hub env vars.  The helper
+              # function's closure is bound to these values at hub start;
+              # to change them you must do a Hub rolling restart (safe —
+              # running user pods are not touched, only newly-spawned
+              # ones pick up the new config).
+              _auth_env = {
+                  "NBI_CHAT_MODEL_PROVIDER": os.environ.get("NBI_CHAT_MODEL_PROVIDER", "openai_compatible"),
+                  "NBI_CHAT_MODEL_ID": os.environ.get("NBI_CHAT_MODEL_ID", "databricks/gdp-gpt4o"),
+                  "NBI_INLINE_COMPLETION_MODEL_PROVIDER": os.environ.get("NBI_INLINE_COMPLETION_MODEL_PROVIDER", "openai_compatible"),
+                  "NBI_INLINE_COMPLETION_MODEL_ID": os.environ.get("NBI_INLINE_COMPLETION_MODEL_ID", "databricks/gdp-gpt4o"),
+                  "NBI_CLAUDE_CHAT_MODEL": os.environ.get("NBI_CLAUDE_CHAT_MODEL", ""),
+                  "NBI_CLAUDE_INLINE_COMPLETION_MODEL": os.environ.get("NBI_CLAUDE_INLINE_COMPLETION_MODEL", ""),
+                  "ANTHROPIC_BASE_URL": os.environ.get("ANTHROPIC_BASE_URL", "https://gateway.scaifactory.dev.azure.scbdev.net/v1"),
+              }
+              _sidecar_cfg = {
+                  "image": os.environ.get("NBI_AUTH_SIDECAR_IMAGE", "registry.scbdev.net/gdp/nbi-auth-sidecar:1.0.0"),
+                  "http_port": int(os.environ.get("NBI_AUTH_SIDECAR_HTTP_PORT", "18090")),
+                  "secret_name": "nbi-llm-auth",
+                  "auth_env": _auth_env,
+                  "inject_provider_env": True,
+              }
+              c.KubeSpawner.pre_spawn_hook = make_pre_spawn_hook(
+                  nbi_auth_sidecar_config=_sidecar_cfg,
+              )
+
+# ---------------------------------------------------------------------------
+# 2. singleuser.*  —  values propagated to every singleuser notebook pod.
+#    Note: pre_spawn_hook.py does additional mutation of spawner fields, so
+#    the fields here are the "base" values on top of which the hook layers.
+# ---------------------------------------------------------------------------
+singleuser:
+  # 2a. Our custom singleuser image (already has jupyter_server_config_nbi_reload.py
+  #     baked into /etc/jupyter via the Dockerfile.singleuser patch).
+  image:
+    name: registry.scbdev.net/gdp/jupyter-singleuser
+    tag: 'latest-nbi'
+    pullPolicy: IfNotPresent
+
+  # 2b. Extra environment: sidecar control knobs + STRING_OVERRIDE defaults.
+  #     pre_spawn_hook.py will NOT overwrite keys already present on the
+  #     spawner, so profile-level overrides win over these defaults.
+  extraEnv:
+    # Explicitly enable NBI's FS-poll fallback refresh even when the
+    # /notebook-intelligence/reload-config HTTP endpoint is healthy.
+    # Redundant with the HTTP path, but eliminates edge cases where
+    # the extension monkey-patch file was stripped on a custom image.
+    - name: NBI_FS_POLL
+      value: '1'
+    # NBI_RELOAD_CONFIG_PATH — path that jupyter_server_config_nbi_reload.py
+    # monitors.  Must match /tmp/nbi-runtime-env.json used by the sidecar.
+    - name: NBI_RUNTIME_ENV_JSON
+      value: '/tmp/nbi-runtime-env.json'
+    # JUPYTER_RUNTIME_DIR must be readable BOTH by the notebook process
+    # AND the sidecar.  /tmp/share-jupyter-runtime is an EmptyDir shared
+    # through pre_spawn_hook.py's volume injection.
+    - name: JUPYTER_RUNTIME_DIR
+      value: '/tmp/share-jupyter-runtime'
+
+  # 2c. nbiAuthSidecar — custom key consumed by our pre_spawn_hook helper
+  #     (and also by templates/ — not by upstream Z2JK).  Keeping these
+  #     values here allows a `--set singleuser.nbiAuthSidecar.image.tag=…`
+  #     to override image tag on a per-upgrade basis WITHOUT hub restart
+  #     for existing pods (newly spawned pods will see the new value via
+  #     the extraConfig block reading env it set itself).
+  nbiAuthSidecar:
+    enabled: true
+    image:
+      # Default fallback if hub.extraEnv.NBI_AUTH_SIDECAR_IMAGE is unset.
+      repository: registry.scbdev.net/gdp/nbi-auth-sidecar
+      tag: '1.0.0'
+      pullPolicy: IfNotPresent
+    httpPort: 18090
+    # K8s resource requests / limits for the sidecar container.  The
+    # sidecar itself is tiny (stdlib Python + curl + JRE); the JVM heap
+    # for token-tool.jar is the dominant consumer hence the 768Mi limit.
+    resources:
+      requests:
+        cpu: '50m'
+        memory: '256Mi'
+      limits:
+        cpu: '500m'
+        memory: '768Mi'
+    # Security context applied to the sidecar container only.  Mirrors
+    # the UID 1000 jovyan user baked into the sidecar Dockerfile.  The
+    # notebook container's securityContext is set separately via the
+    # standard singleuser.extraSecurityContext key.
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+    # Toggle K8s liveness/readiness probes.  True = use httpGet against
+    # sidecar /healthz and /ready with explicit host=127.0.0.1.
+    probes:
+      enabled: true
+      livenessInitialDelaySeconds: 10
+      readinessInitialDelaySeconds: 15
+
+# ---------------------------------------------------------------------------
+# 3. prePuller — optional.  Sidecar image is fairly small (< 500 MB) so
+#    the continuous pre-puller handles it without extra tuning.
+# ---------------------------------------------------------------------------
+prePuller:
+  hook:
+    enabled: true
+  continuous:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# 4. scheduling — no NBI-specific overrides needed for NBI; keep the
+#    upstream defaults.  Left as an anchor so site-values.yaml can merge
+#    on top without having to redeclare the entire block.
+# ---------------------------------------------------------------------------
+scheduling: {}
+
+# ---------------------------------------------------------------------------
+# 5. nbi-internal — meta values NOT consumed by Z2JK.  These are read by
+#    helm-template-test.sh (this chart's self-test) and by the CI
+#    build-images.sh pipeline.  They live under a custom YAML key so they
+#    are silently ignored by the upstream Z2JK templates.
+# ---------------------------------------------------------------------------
+x-nbi-internal:
+  # Test-only values used by helm-template-test.sh.
+  tests:
+    z2jk_chart_version: '3.3.0'
+    z2jk_chart_repo: 'https://jupyterhub.github.io/helm-chart/'
+    expected_containers_per_user_pod: 2
+    expected_sidecar_name: 'nbi-auth-sidecar'
+    expected_secret_name: 'nbi-llm-auth'
+    expected_http_host: '127.0.0.1'
+    expected_nbi_provider_env_keys:
+      - NBI_CHAT_MODEL_PROVIDER
+      - NBI_CHAT_MODEL_ID
+      - NBI_INLINE_COMPLETION_MODEL_PROVIDER
+      - NBI_INLINE_COMPLETION_MODEL_ID
+      - NBI_CLAUDE_CHAT_MODEL
+      - NBI_CLAUDE_INLINE_COMPLETION_MODEL
+      - ANTHROPIC_BASE_URL

@@ -20,9 +20,23 @@ RUN mkdir -p "${CONDA_DIR}/share/jupyter/nbi" \
  && cp /opt/nbi-local-dev/nbi-config.local.json "${CONDA_DIR}/share/jupyter/nbi/config.json" \
  && chown -R ${NB_UID}:${NB_GID} "${CONDA_DIR}/share/jupyter/nbi"
 
-# Optional: copy jupyter_server_config snippet
+# Optional: copy jupyter_server_config snippet + NBI hot-reload monkey patch.
+# The reload patch file injects:
+#   (A) POST /notebook-intelligence/reload-config authenticated endpoint.
+#   (B) S2 FS-poller daemon thread (4-tuple stat signature check every 5s)
+#       that triggers do_reload + MCPServerStatusChange WS broadcast whenever
+#       the sidecar atomically replaces config.json or updates the env ferry.
 RUN mkdir -p /etc/jupyter \
- && cp /opt/nbi-local-dev/jupyter_server_config.py /etc/jupyter/jupyter_server_config.py
+ && cp /opt/nbi-local-dev/jupyter_server_config.py /etc/jupyter/jupyter_server_config.py \
+ && cp /opt/nbi-local-dev/deploy/jupyter_server_config_nbi_reload.py /etc/jupyter/jupyter_server_config_nbi_reload.py \
+ && chmod 0644 /etc/jupyter/*.py \
+ && ls -la /etc/jupyter/
+
+# Ensure Jupyter Server scans /etc/jupyter for config files on startup.
+# Z2JK often sets this already but baking it into the image guarantees the
+# reload patch fires even in environments (local, minikube) that do not set
+# JUPYTER_CONFIG_PATH in the singleuser pod spec.
+ENV JUPYTER_CONFIG_PATH=/etc/jupyter
 
 ENV TOKEN_PROVIDER=mock \
     MODE=mock \
